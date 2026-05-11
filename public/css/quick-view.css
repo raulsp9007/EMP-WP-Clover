@@ -1,0 +1,469 @@
+/**
+ * Quick View Modal Styles - Theme Adaptive
+ */
+
+/* Modal Overlay - Generic */
+#clover-quick-view-modal {
+    display: none;
+    position: fixed;
+    z-index: 999999;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(2px);
+}
+
+/* Modal Content */
+.clover-quick-view-content {
+    background-color: #fff;
+    margin: 3% auto;
+    border-radius: 8px;
+    max-width: 900px;
+    width: 90%;
+    max-height: 90vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    box-shadow: 0 5px 30px rgba(0, 0, 0, 0.3);
+}
+
+/* Close Button - Use theme's button styles if available */
+.clover-quick-view-close {
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    font-size: 28px;
+    font-weight: bold;
+    color: inherit;
+    opacity: 0.6;
+    cursor: pointer;
+    z-index: 10;
+    line-height: 1;
+    transition: opacity 0.2s;
+    background: none;
+    border: none;
+    padding: 5px;
+}
+
+.clover-quick-view-close:hover {
+    opacity: 1;
+}
+
+/* Modal Body - Scrollable */
+.clover-quick-view-body {
+    overflow-y: auto;
+    flex: 1;
+    padding: 0;
+}
+
+/* Product Image and Info - Two Column Layout */
+.clover-quick-view-product {
+    display: flex;
+    flex-wrap: wrap;
+    padding: 30px;
+    gap: 30px;
+}
+
+.clover-quick-view-left-column {
+    flex: 0 0 45%;
+    max-width: 45%;
+}
+
+.clover-quick-view-right-column {
+    flex: 1;
+    min-width: 50%;
+}
+
+.clover-quick-view-image {
+    margin-bottom: 20px;
+}
+
+.clover-quick-view-image img {
+    width: 100%;
+    height: auto;
+    border-radius: 4px;
+    object-fit: cover;
+}
+
+/* Product Title - Inherit from theme */
+.clover-quick-view-title {
+    font-size: 24px;
+    margin: 0 0 10px 0;
+    color: inherit;
+    font-family: inherit;
+}
+
+/* Product Description */
+.clover-quick-view-description {
+    margin-bottom: 15px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #666;
+}
+
+.clover-quick-view-description p {
+    margin: 0 0 10px 0;
+}
+
+.clover-quick-view-description p:last-child {
+    margin-bottom: 0;
+}
+
+/* Price - Use WooCommerce price styles */
+.clover-quick-view-price-wrapper {
+    margin-bottom: 20px;
+}
+
+.clover-quick-view-price-wrapper .price,
+.clover-quick-view-price-wrapper .woocommerce-Price-amount {
+    font-size: inherit;
+    color: inherit;
+}
+
+/* Modifiers Section */
+.clover-quick-view-modifiers {
+    margin-top: 20px;
+}
+
+.clover-quick-view-modifiers h3 {
+    font-size: 18px;
+    margin: 0 0 15px 0;
+    color: inherit;
+    font-family: inherit;
+}
+
+/* Modifier Tabs - Use theme button styles */
+.clover-quick-view-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 0;
+    border-bottom: 2px solid #eee;
+    padding-bottom: 0;
+}
+
+.quick-view-modifier-tab {
+    padding: 10px 16px;
+    background-color: #f5f5f5;
+    border: 1px solid #eee;
+    border-bottom: none;
+    border-radius: 4px 4px 0 0;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    color: inherit;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: -2px;
+}
+
+.quick-view-modifier-tab:hover {
+    background-color: #e8e8e8;
+}
+
+.quick-view-modifier-tab.active {
+    background-color: #fff;
+    border-bottom: 2px solid #fff;
+    font-weight: 600;
+}
+
+/* Tab Panels */
+.clover-quick-view-tab-panels {
+    border: 1px solid #eee;
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    min-height: 150px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.quick-view-modifier-panel {
+    display: none;
+    padding: 15px;
+}
+
+.quick-view-modifier-panel.active {
+    display: block;
+}
+
+/* Modifier Groups */
+.quick-view-modifier-group {
+    margin-bottom: 20px;
+    padding: 15px;
+    background-color: #f9f9f9;
+    border-radius: 4px;
+}
+
+.quick-view-modifier-group h4 {
+    margin: 0 0 12px 0;
+    color: inherit;
+    font-size: 16px;
+    font-family: inherit;
+}
+
+.modifier-constraint {
+    font-weight: normal;
+    font-size: 0.85em;
+    color: #666;
+    background-color: #f0f0f0;
+    padding: 2px 6px;
+    border-radius: 3px;
+    margin-left: 8px;
+}
+
+/* Modifier Items */
+.quick-view-modifier-item {
+    margin-bottom: 8px;
+}
+
+.quick-view-modifier-item label {
+    display: block;
+    padding: 8px;
+    background-color: #fff;
+    border: 1px solid #eee;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    font-weight: normal;
+}
+
+.quick-view-modifier-item label:hover {
+    background-color: #f9f9f9;
+}
+
+.quick-view-modifier-item input[type="checkbox"] {
+    margin-right: 8px;
+}
+
+/* Modal Footer - Fixed */
+.clover-quick-view-footer {
+    position: sticky;
+    bottom: 0;
+    background-color: #fff;
+    border-top: 1px solid #eee;
+    padding: 20px 30px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    z-index: 5;
+}
+
+/* Quantity Selector */
+.clover-quick-view-quantity {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.clover-quick-view-quantity label {
+    font-size: 14px;
+    font-weight: 600;
+    color: inherit;
+    font-family: inherit;
+    margin: auto;
+}
+
+.clover-quick-view-qty-wrapper {
+    display: flex;
+    align-items: center;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.quick-view-qty-btn {
+    width: 36px;
+    height: 36px;
+    border: none;
+    background-color: #f5f5f5;
+    cursor: pointer;
+    font-size: 16px;
+    color: inherit;
+    transition: background-color 0.2s;
+    padding: unset;
+}
+
+.quick-view-qty-btn:hover {
+    background-color: #e8e8e8;
+}
+
+.quick-view-qty-input {
+    width: 50px;
+    height: 36px;
+    border: none;
+    border-left: 1px solid #ddd;
+    border-right: 1px solid #ddd;
+    text-align: center;
+    font-size: 14px;
+    appearance: textfield;
+}
+
+/* Hide spinners/arrows for number input - Chrome, Safari, Edge, Opera */
+.quick-view-qty-input::-webkit-outer-spin-button,
+.quick-view-qty-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+/* Add to Cart Button - Use theme button styles */
+.clover-quick-view-add-to-cart {
+    padding: 12px 24px;
+    background-color: #0073aa;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    white-space: nowrap;
+    font-family: inherit;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.clover-quick-view-add-to-cart .price {
+    font-weight: 700;
+    font-size: 16px;
+}
+
+.clover-quick-view-add-to-cart:hover {
+    opacity: 0.9;
+}
+
+.clover-quick-view-add-to-cart:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Quick View Button - Match WooCommerce Add to Cart button */
+.clover-quick-view-btn {
+    display: inline-block;
+    padding: 12px 24px;
+    background-color: var(--wp--preset--color--primary, --wp--preset--color--contrast, #0073aa);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+    text-align: center;
+    white-space: nowrap;
+    text-decoration: none;
+    margin-top: 10px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* Position button properly in product loops */
+.woocommerce ul.products li.product .clover-quick-view-btn {
+    display: block;
+    width: 100%;
+    margin-top: 10px;
+}
+
+/* Ensure button doesn't interfere with Add to Cart */
+.woocommerce ul.products li.product .button,
+.woocommerce ul.products li.product .add_to_cart_button {
+    margin-bottom: 8px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .clover-quick-view-content {
+        margin: 10% auto;
+        width: 95%;
+    }
+
+    .clover-quick-view-product {
+        flex-direction: column;
+        padding: 20px;
+    }
+
+    .clover-quick-view-left-column,
+    .clover-quick-view-right-column {
+        flex: 0 0 100%;
+        max-width: 100%;
+    }
+
+    .clover-quick-view-image {
+        margin-bottom: 15px;
+    }
+
+    .clover-quick-view-footer {
+        flex-direction: column;
+        padding: 15px 20px;
+    }
+
+    .clover-quick-view-quantity {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .clover-quick-view-add-to-cart {
+        width: 100%;
+        text-align: center;
+    }
+}
+
+/* Body class when modal is open */
+body.clover-quick-view-open {
+    overflow: hidden;
+}
+
+/* Theme Integration - Allow themes to override via CSS variables */
+:root {
+    --clover-quick-view-primary-color: #0073aa;
+    --clover-quick-view-primary-hover: #005a87;
+    --clover-quick-view-bg-color: #ffffff;
+    --clover-quick-view-text-color: inherit;
+    --clover-quick-view-border-color: #eee;
+    --clover-quick-view-overlay-bg: rgba(0, 0, 0, 0.5);
+}
+
+/* Allow themes to easily customize colors */
+.clover-quick-view-add-to-cart,
+.clover-quick-view-btn {
+    background-color: var(--clover-quick-view-primary-color, #0073aa);
+}
+
+.clover-quick-view-add-to-cart:hover,
+.clover-quick-view-btn:hover {
+    background-color: var(--clover-quick-view-primary-hover, #005a87);
+}
+
+.clover-quick-view-content {
+    background-color: var(--clover-quick-view-bg-color, #ffffff);
+}
+
+#clover-quick-view-modal {
+    background-color: var(--clover-quick-view-overlay-bg, rgba(0, 0, 0, 0.5));
+}
+
+/* Cart modifier original price - styled like <del> tag */
+.clover-modifier-original-price {
+    text-decoration: line-through;
+    opacity: 0.6;
+}
+
+ins {
+    text-decoration: none;
+}
+
+* dt[class^="variation-"] {
+    display: none !important;
+}
+
+* dd[class^="variation-"] {
+    font-style: normal !important;
+}

@@ -172,6 +172,10 @@ class Clover_Admin
         register_setting('clover_settings', 'clover_enable_logs', array($this, 'sanitize_checkbox'));
         register_setting('clover_settings', 'clover_log_to_wp_debug', array($this, 'sanitize_checkbox'));
 
+        // Tax settings
+        register_setting('clover_settings', 'clover_tax_enabled', array($this, 'sanitize_checkbox'));
+        register_setting('clover_settings', 'clover_tax_rate_id', array($this, 'sanitize_text'));
+
         // ========== TAB 1: API Configuration ==========
         add_settings_section(
             'clover_main_section',
@@ -1535,6 +1539,7 @@ class Clover_Admin
                 <a href="?page=clover-api-config&tab=hours" class="nav-tab <?php echo $active_tab === 'hours' ? 'nav-tab-active' : ''; ?>">Store Hours</a>
                 <a href="?page=clover-api-config&tab=quickview" class="nav-tab <?php echo $active_tab === 'quickview' ? 'nav-tab-active' : ''; ?>">Quick View</a>
                 <a href="?page=clover-api-config&tab=banner" class="nav-tab <?php echo $active_tab === 'banner' ? 'nav-tab-active' : ''; ?>">Business Hours Banner</a>
+                <a href="?page=clover-api-config&tab=taxes" class="nav-tab <?php echo $active_tab === 'taxes' ? 'nav-tab-active' : ''; ?>">Taxes</a>
                 <a href="?page=clover-api-config&tab=logs" class="nav-tab <?php echo $active_tab === 'logs' ? 'nav-tab-active' : ''; ?>">Logs</a>
             </h2>
 
@@ -1549,7 +1554,8 @@ class Clover_Admin
                     'pricing' => array('clover_import_fee_enabled', 'clover_import_fee_percent', 'clover_global_discount_enabled', 'clover_global_discount_percent', 'clover_global_discount_apply_modifiers', 'clover_prevent_orders_when_closed'),
                     'quickview' => array('clover_quick_view_show_button', 'clover_quick_view_show_on_shop', 'clover_quick_view_show_on_category', 'clover_quick_view_show_on_tag', 'clover_quick_view_show_on_pages', 'clover_quick_view_show_on_posts', 'clover_quick_view_button_text', 'clover_quick_view_button_position'),
                     'banner' => array('clover_bh_show_banner', 'clover_bh_banner_position', 'clover_bh_show_countdown'),
-                    'logs' => array('clover_enable_logs', 'clover_log_to_wp_debug')
+                    'logs'   => array('clover_enable_logs', 'clover_log_to_wp_debug'),
+                    'taxes'  => array('clover_tax_enabled', 'clover_tax_rate_id'),
                 );
                 $current_tab_options = $tab_options[$active_tab] ?? array();
                 $all_options = array_merge(...array_values($tab_options));
@@ -1583,6 +1589,8 @@ class Clover_Admin
                     do_settings_sections('clover-settings-quickview');
                 } elseif ($active_tab === 'banner') {
                     do_settings_sections('clover-settings-banner');
+                } elseif ($active_tab === 'taxes') {
+                    $this->render_taxes_tab();
                 } elseif ($active_tab === 'logs') {
                     do_settings_sections('clover-settings-logs');
 
@@ -3560,5 +3568,98 @@ class Clover_Admin
           });
           </script>
           <?php
+    }
+
+    /**
+     * Render the Taxes tab
+     */
+    public function render_taxes_tab()
+    {
+        $enabled     = get_option('clover_tax_enabled', '0');
+        $saved_id    = get_option('clover_tax_rate_id', '');
+        $nonce       = wp_create_nonce('clover_make_request');
+        ?>
+        <h2>Tax Configuration</h2>
+        <p>Apply a Clover tax rate to every order line item. Clover will display the tax breakdown in its dashboard and reports.</p>
+
+        <table class="form-table">
+            <tr>
+                <th scope="row">Enable Taxes</th>
+                <td>
+                    <label>
+                        <input type="checkbox" name="clover_tax_enabled" value="1" <?php checked($enabled, '1'); ?> id="clover_tax_enabled" />
+                        Apply Clover tax rate to orders
+                    </label>
+                </td>
+            </tr>
+            <tr>
+                <th scope="row">Clover Tax Rate</th>
+                <td>
+                    <select name="clover_tax_rate_id" id="clover_tax_rate_id" style="min-width:280px;">
+                        <option value="">— Select a tax rate —</option>
+                        <?php
+                        $cached = get_option('clover_tax_rates_cache', array());
+                        if (!empty($cached) && is_array($cached)) {
+                            foreach ($cached as $rate) {
+                                $rate_id   = $rate['id'] ?? '';
+                                $rate_name = $rate['name'] ?? $rate_id;
+                                $rate_pct  = isset($rate['rate']) ? ' (' . ($rate['rate'] / 1000) . '%)' : '';
+                                echo '<option value="' . esc_attr($rate_id) . '" ' . selected($saved_id, $rate_id, false) . '>'
+                                    . esc_html($rate_name . $rate_pct) . '</option>';
+                            }
+                        }
+                        ?>
+                    </select>
+                    <button type="button" class="button button-secondary" id="clover-reload-tax-rates" style="margin-left:8px;">
+                        Load Tax Rates from Clover
+                    </button>
+                    <span id="clover-tax-rates-spinner" class="spinner" style="float:none;vertical-align:middle;"></span>
+                    <p class="description" id="clover-tax-rates-msg"></p>
+                </td>
+            </tr>
+        </table>
+
+        <script>
+        jQuery(document).ready(function($) {
+            $('#clover-reload-tax-rates').on('click', function() {
+                var $btn     = $(this);
+                var $spinner = $('#clover-tax-rates-spinner');
+                var $msg     = $('#clover-tax-rates-msg');
+                var $select  = $('#clover_tax_rate_id');
+                var savedId  = '<?php echo esc_js($saved_id); ?>';
+
+                $btn.prop('disabled', true);
+                $spinner.addClass('is-active');
+                $msg.text('');
+
+                $.post(ajaxurl, {
+                    action: 'clover_reload_tax_rates',
+                    nonce:  '<?php echo esc_js($nonce); ?>'
+                }, function(res) {
+                    if (res.success && res.data.rates) {
+                        var rates = res.data.rates;
+                        $select.find('option:not(:first)').remove();
+                        $.each(rates, function(i, rate) {
+                            var pct  = rate.rate ? ' (' + (rate.rate / 1000) + '%)' : '';
+                            var opt  = $('<option>')
+                                .val(rate.id)
+                                .text((rate.name || rate.id) + pct)
+                                .prop('selected', rate.id === savedId);
+                            $select.append(opt);
+                        });
+                        $msg.css('color', 'green').text(rates.length + ' tax rate(s) loaded. Select one and save.');
+                    } else {
+                        $msg.css('color', 'red').text(res.data.error || 'Failed to load tax rates.');
+                    }
+                }).fail(function() {
+                    $msg.css('color', 'red').text('Request failed.');
+                }).always(function() {
+                    $btn.prop('disabled', false);
+                    $spinner.removeClass('is-active');
+                });
+            });
+        });
+        </script>
+        <?php
     }
 }

@@ -676,6 +676,47 @@ function clover_clear_logs()
 add_action('wp_ajax_clover_reload_employees', 'clover_reload_employees');
 
 /**
+ * AJAX handler to reload Clover tax rates
+ */
+function clover_reload_tax_rates()
+{
+    if (!wp_verify_nonce($_POST['nonce'], 'clover_make_request')) {
+        wp_send_json_error(array('error' => 'Security check failed'));
+    }
+
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('error' => 'Insufficient permissions'));
+    }
+
+    $config       = require CLOVER_PLUGIN_PATH . 'config/api.php';
+    $orderService = new \Src\Services\OrderService($config);
+
+    try {
+        $response = $orderService->getTaxRates();
+        $rates    = array();
+
+        if (isset($response['data']['elements']) && is_array($response['data']['elements'])) {
+            foreach ($response['data']['elements'] as $rate) {
+                $rates[] = array(
+                    'id'   => $rate['id']   ?? '',
+                    'name' => $rate['name'] ?? ($rate['id'] ?? ''),
+                    'rate' => $rate['rate'] ?? 0,  // Clover stores rate as thousandths of a percent (e.g. 8000 = 8%)
+                );
+            }
+        }
+
+        // Cache rates so they persist across page loads
+        update_option('clover_tax_rates_cache', $rates);
+
+        wp_send_json_success(array('rates' => $rates));
+    } catch (Exception $e) {
+        wp_send_json_error(array('error' => $e->getMessage()));
+    }
+}
+
+add_action('wp_ajax_clover_reload_tax_rates', 'clover_reload_tax_rates');
+
+/**
  * AJAX handler to reload Clover order types
  */
 function clover_reload_order_types()

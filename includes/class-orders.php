@@ -339,13 +339,20 @@ class WPOrders_Integration
             $item_price_cents = intval(round($base_price * $quantity * 100));
 
             // Agregar el item al payload
-            $itemsPayload['items'][] = [
-                'item' => [
-                    'id' => $external_id,
-                ],
-                'name' => $product->get_name(),
-                'price' => $item_price_cents
+            $line_item = [
+                'item'  => ['id' => $external_id],
+                'name'  => $product->get_name(),
+                'price' => $item_price_cents,
             ];
+
+            // Apply Clover tax rate if configured
+            $tax_enabled = get_option('clover_tax_enabled', '0');
+            $tax_rate_id = get_option('clover_tax_rate_id', '');
+            if ($tax_enabled === '1' && !empty($tax_rate_id)) {
+                $line_item['taxRates'] = [['id' => $tax_rate_id]];
+            }
+
+            $itemsPayload['items'][] = $line_item;
         }
 
         return $itemsPayload;

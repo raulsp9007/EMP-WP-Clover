@@ -3603,7 +3603,7 @@ class Clover_Admin
                             foreach ($cached as $rate) {
                                 $rate_id   = $rate['id'] ?? '';
                                 $rate_name = $rate['name'] ?? $rate_id;
-                                $rate_pct  = isset($rate['rate']) ? ' (' . ($rate['rate'] / 1000) . '%)' : '';
+                                $rate_pct  = isset($rate['rate']) ? ' (' . round($rate['rate'] / 100000, 4) . '%)' : '';
                                 echo '<option value="' . esc_attr($rate_id) . '" ' . selected($saved_id, $rate_id, false) . '>'
                                     . esc_html($rate_name . $rate_pct) . '</option>';
                             }
@@ -3640,7 +3640,7 @@ class Clover_Admin
                         var rates = res.data.rates;
                         $select.find('option:not(:first)').remove();
                         $.each(rates, function(i, rate) {
-                            var pct  = rate.rate ? ' (' + (rate.rate / 1000) + '%)' : '';
+                            var pct  = rate.rate ? ' (' + Math.round(rate.rate / 100000 * 10000) / 10000 + '%)' : '';
                             var opt  = $('<option>')
                                 .val(rate.id)
                                 .text((rate.name || rate.id) + pct)

@@ -159,6 +159,19 @@ class OrderService extends BaseService
         return $this->get('/order_types');
     }
 
+    /**
+     * Apply a tax rate to a line item
+     *
+     * @param string $orderId
+     * @param string $lineItemId
+     * @param string $taxRateId
+     * @return array
+     */
+    public function applyTaxRateToLineItem(string $orderId, string $lineItemId, string $taxRateId): array
+    {
+        return $this->post("/orders/{$orderId}/line_items/{$lineItemId}/taxRates", ['id' => $taxRateId]);
+    }
+
     // Public method to get raw data from any endpoint
     public function getData(string $endpoint, array $params = []): array
     {

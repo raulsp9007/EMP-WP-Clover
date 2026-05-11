@@ -227,6 +227,9 @@ class WPOrders_Integration
                     // Procesar modificadores para cada item
                     $this->processModifiers($order, $orderService, $cloverOrderId, $bulkItemsResponse);
 
+                    // Aplicar tax rate a cada line item si está configurado
+                    $this->processTaxRates($orderService, $cloverOrderId, $bulkItemsResponse);
+
                     // Mark order as paid using payment record API (if enabled)
                     $auto_mark_paid = get_option('clover_auto_mark_as_paid', '1');
                     if ($auto_mark_paid === '1') {
@@ -336,23 +339,17 @@ class WPOrders_Integration
                 $base_price = $base_price * (1 - $discount_percent / 100);
             }
 
-            $item_price_cents = intval(round($base_price * $quantity * 100));
+            // Unit price in cents (Clover expects unit price, not total)
+            $unit_price_cents = intval(round($base_price * 100));
 
-            // Agregar el item al payload
-            $line_item = [
-                'item'  => ['id' => $external_id],
-                'name'  => $product->get_name(),
-                'price' => $item_price_cents,
-            ];
-
-            // Apply Clover tax rate if configured
-            $tax_enabled = get_option('clover_tax_enabled', '0');
-            $tax_rate_id = get_option('clover_tax_rate_id', '');
-            if ($tax_enabled === '1' && !empty($tax_rate_id)) {
-                $line_item['taxRates'] = [['id' => $tax_rate_id]];
+            // Add one entry per unit (Clover line items are per-unit)
+            for ($i = 0; $i < $quantity; $i++) {
+                $itemsPayload['items'][] = [
+                    'item'  => ['id' => $external_id],
+                    'name'  => $product->get_name(),
+                    'price' => $unit_price_cents,
+                ];
             }
-
-            $itemsPayload['items'][] = $line_item;
         }
 
         return $itemsPayload;
@@ -673,6 +670,42 @@ class WPOrders_Integration
         }
 
         return null;
+    }
+
+    /**
+     * Apply configured Clover tax rate to every line item in the order
+     */
+    private function processTaxRates($orderService, $cloverOrderId, $bulkItemsResponse)
+    {
+        $tax_enabled = get_option('clover_tax_enabled', '0');
+        $tax_rate_id = get_option('clover_tax_rate_id', '');
+
+        if ($tax_enabled !== '1' || empty($tax_rate_id)) {
+            clover_log("TAX RATES: Disabled or no tax rate configured — skipping.");
+            return;
+        }
+
+        clover_log("TAX RATES: Applying tax rate {$tax_rate_id} to all line items for order {$cloverOrderId}");
+
+        // Collect all line item IDs from bulk response
+        $lineItemIds = [];
+        if (is_array($bulkItemsResponse['data'])) {
+            foreach ($bulkItemsResponse['data'] as $lineItem) {
+                if (isset($lineItem['id'])) {
+                    $lineItemIds[] = $lineItem['id'];
+                }
+            }
+        }
+
+        if (empty($lineItemIds)) {
+            clover_log("TAX RATES: No line item IDs found in bulk response — cannot apply taxes.");
+            return;
+        }
+
+        foreach ($lineItemIds as $lineItemId) {
+            $response = $orderService->applyTaxRateToLineItem($cloverOrderId, $lineItemId, $tax_rate_id);
+            clover_log("TAX RATES: Applied to line item {$lineItemId} — status: " . ($response['status'] ?? 'unknown'));
+        }
     }
 }
 

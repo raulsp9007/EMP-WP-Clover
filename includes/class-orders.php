@@ -130,6 +130,23 @@ class WPOrders_Integration
             $lineItems[] = $line_item;
         }
 
+        // Delivery fee — add as ad-hoc line item (no taxRates, no item.id)
+        $shipping_total = floatval($order->get_shipping_total());
+        if ($shipping_total > 0) {
+            $shipping_methods_raw = $order->get_shipping_methods();
+            $shipping_label       = 'Delivery Fee';
+            if (!empty($shipping_methods_raw)) {
+                $sm = reset($shipping_methods_raw);
+                $shipping_label = $sm->get_method_title() ?: $sm->get_name() ?: 'Delivery Fee';
+            }
+            $lineItems[] = [
+                'name'  => $shipping_label,
+                'price' => intval(round($shipping_total * 100)),
+                // No taxRates — delivery fee is tax-exempt
+            ];
+            clover_log("DELIVERY FEE: '{$shipping_label}' = \${$shipping_total}");
+        }
+
         // Note
         $customer_note = $order->get_customer_note();
         $user_id       = $order->get_customer_id();

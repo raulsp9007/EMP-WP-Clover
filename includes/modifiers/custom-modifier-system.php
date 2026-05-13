@@ -921,7 +921,7 @@ class Custom_Modifier_System
                     }
                 }
 
-                var addToCartBtn = $('button[name="addtocart"], .single_add_to_cart_button');
+                var addToCartBtn = $('button[name="addtocart"], .single_add_to_cart_button, .clover-quick-view-add-to-cart');
 
                 if (!allValid) {
                     addToCartBtn.prop('disabled', true);

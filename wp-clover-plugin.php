@@ -487,42 +487,31 @@ function clover_is_category_closed($category_id)
 }
 
 /**
- * Get product availability based on store + category hours.
+ * Get product availability based on category-specific hours only.
  * Returns ['available' => bool, 'message' => string].
- * Logic mirrors clover_validate_cart_when_closed (server-side cart validation).
+ *
+ * Rule: if a category has "Enable Category Hours = yes", its Opening Hours
+ * determine availability. Categories without custom hours never restrict.
  */
 function clover_get_product_availability($product_id)
 {
-    $business_hours = new \Src\BusinessHours\Business_Hours();
-
-    // 1. Store hours first
-    $store_status = $business_hours->get_business_status();
-    if (!$store_status['open'] && empty($store_status['error'])) {
-        $msg = !empty($store_status['message']) ? $store_status['message'] : 'Store is currently closed';
-        return ['available' => false, 'message' => $msg];
+    $categories = get_the_terms($product_id, 'product_cat');
+    if (!$categories || is_wp_error($categories)) {
+        return ['available' => true, 'message' => ''];
     }
 
-    // 2. Category-specific hours (same logic as cart validation)
-    $categories = get_the_terms($product_id, 'product_cat');
-    if ($categories && !is_wp_error($categories)) {
-        $all_closed  = true;
-        $closed_msg  = '';
-
-        foreach ($categories as $cat) {
-            if (!clover_is_category_closed($cat->term_id)) {
-                $all_closed = false;
-                break;
-            }
-            if (empty($closed_msg)) {
-                $cat_status = $business_hours->get_business_status($cat->term_id);
-                if (!empty($cat_status['message'])) {
-                    $closed_msg = $cat_status['message'];
-                }
-            }
+    foreach ($categories as $cat) {
+        // Only categories with custom hours enabled are evaluated
+        $enabled = get_term_meta($cat->term_id, 'category_hours_enabled', true);
+        if ($enabled !== 'yes') {
+            continue;
         }
 
-        if ($all_closed && !empty($closed_msg)) {
-            return ['available' => false, 'message' => $closed_msg];
+        if (clover_is_category_closed($cat->term_id)) {
+            $business_hours = new \Src\BusinessHours\Business_Hours();
+            $cat_status     = $business_hours->get_business_status($cat->term_id);
+            $msg            = !empty($cat_status['message']) ? $cat_status['message'] : 'Currently unavailable';
+            return ['available' => false, 'message' => $msg];
         }
     }
 

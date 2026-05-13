@@ -231,6 +231,12 @@ class WPOrders_Integration
                 $cloverOrderId = $response['data']['id'];
                 clover_log("ATOMIC ORDER CREATED: {$cloverOrderId}");
 
+                // Clover ignores employee in atomic order payload — patch explicitly
+                if (!empty($employee_id)) {
+                    $orderService->updateOrder($cloverOrderId, ['employee' => ['id' => $employee_id]]);
+                    clover_log("EMPLOYEE PATCHED: {$employee_id} on order {$cloverOrderId}");
+                }
+
                 // Mark as paid
                 $auto_mark_paid = get_option('clover_auto_mark_as_paid', '1');
                 if ($auto_mark_paid === '1') {

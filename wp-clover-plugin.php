@@ -740,9 +740,6 @@ function clover_reload_employees()
             }
         }
 
-        // Persist to cache so employee_id_callback reads from DB — no live API call on page load
-        update_option('clover_employees_cache', json_encode($employees));
-
         wp_send_json_success(array('employees' => $employees));
     } catch (Exception $e) {
         wp_send_json_error(array('error' => $e->getMessage()));

@@ -69,6 +69,12 @@ class OrderService extends BaseService
         return $this->post('/atomic_order/orders', $payload);
     }
 
+    // PATCH /orders/{orderId} — update order fields (employee, note, etc.)
+    public function updateOrder(string $orderId, array $payload): array
+    {
+        return $this->post("/orders/{$orderId}", $payload);
+    }
+
     // Nuevo método para crear una orden básica
     public function createOrder(array $payload): array
     {

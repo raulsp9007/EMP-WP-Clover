@@ -356,6 +356,97 @@ function clover_is_category_closed($category_id)
     return true; // Closed
 }
 
+/**
+ * Get product availability based on store + category hours.
+ * Returns ['available' => bool, 'message' => string].
+ * Logic mirrors clover_validate_cart_when_closed (server-side cart validation).
+ */
+function clover_get_product_availability($product_id)
+{
+    $prevent_orders = get_option('clover_prevent_orders_when_closed', '0');
+    if ($prevent_orders !== '1') {
+        return ['available' => true, 'message' => ''];
+    }
+
+    $business_hours = new \Src\BusinessHours\Business_Hours();
+
+    // 1. Store hours first
+    $store_status = $business_hours->get_business_status();
+    if (!$store_status['open'] && empty($store_status['error'])) {
+        $msg = !empty($store_status['message']) ? $store_status['message'] : 'Store is currently closed';
+        return ['available' => false, 'message' => $msg];
+    }
+
+    // 2. Category-specific hours (same logic as cart validation)
+    $categories = get_the_terms($product_id, 'product_cat');
+    if ($categories && !is_wp_error($categories)) {
+        $all_closed  = true;
+        $closed_msg  = '';
+
+        foreach ($categories as $cat) {
+            if (!clover_is_category_closed($cat->term_id)) {
+                $all_closed = false;
+                break;
+            }
+            if (empty($closed_msg)) {
+                $cat_status = $business_hours->get_business_status($cat->term_id);
+                if (!empty($cat_status['message'])) {
+                    $closed_msg = $cat_status['message'];
+                }
+            }
+        }
+
+        if ($all_closed && !empty($closed_msg)) {
+            return ['available' => false, 'message' => $closed_msg];
+        }
+    }
+
+    return ['available' => true, 'message' => ''];
+}
+
+// ── Single product page & quick view ─────────────────────────────────────────
+// Outputs a hidden input (read by modifier-system JS) + visible notice.
+add_action('woocommerce_before_add_to_cart_button', 'clover_output_availability_check', 5);
+function clover_output_availability_check()
+{
+    global $product;
+    if (!$product) return;
+
+    $avail = clover_get_product_availability($product->get_id());
+    if (!$avail['available']) {
+        echo '<input type="hidden" id="category-hours-closed" value="1">';
+        echo '<input type="hidden" id="category-hours-message" value="' . esc_attr($avail['message']) . '">';
+        echo '<p class="category-hours-notice" style="color:#dc3545;font-size:0.9em;font-weight:500;margin:0 0 10px 0;">' . esc_html($avail['message']) . '</p>';
+    }
+}
+
+// ── Shop loop product cards ───────────────────────────────────────────────────
+// Adds CSS class + aria-disabled to the loop Add to Cart button.
+add_filter('woocommerce_loop_add_to_cart_args', 'clover_loop_add_to_cart_args', 10, 2);
+function clover_loop_add_to_cart_args($args, $product)
+{
+    $avail = clover_get_product_availability($product->get_id());
+    if (!$avail['available']) {
+        $args['class'] .= ' category-unavailable';
+        $args['attributes']['aria-disabled']        = 'true';
+        $args['attributes']['data-unavailable-msg'] = $avail['message'];
+    }
+    return $args;
+}
+
+// Outputs unavailability message below loop button (priority 11 = after WC button at 10).
+add_action('woocommerce_after_shop_loop_item', 'clover_loop_unavailability_message', 11);
+function clover_loop_unavailability_message()
+{
+    global $product;
+    if (!$product) return;
+
+    $avail = clover_get_product_availability($product->get_id());
+    if (!$avail['available']) {
+        echo '<p class="category-hours-notice" style="color:#dc3545;font-size:0.8em;margin:4px 0 0;text-align:center;">' . esc_html($avail['message']) . '</p>';
+    }
+}
+
 // AJAX handler for API requests
 function clover_handle_api_request()
 {
@@ -2016,9 +2107,18 @@ function clover_quick_view_product_handler()
                 </div>
             </div>
 
-            <button type="button" class="clover-quick-view-add-to-cart" data-product-id="<?php echo esc_attr($product_id); ?>">
+            <?php $qv_avail = clover_get_product_availability($product_id); ?>
+            <button type="button"
+                class="clover-quick-view-add-to-cart<?php echo !$qv_avail['available'] ? ' disabled' : ''; ?>"
+                data-product-id="<?php echo esc_attr($product_id); ?>"
+                <?php echo !$qv_avail['available'] ? 'disabled' : ''; ?>>
                 Add to Cart - <?php echo $price_html; ?>
             </button>
+            <?php if (!$qv_avail['available']): ?>
+            <p class="category-hours-notice" style="color:#dc3545;font-size:0.85em;font-weight:500;margin:6px 0 0;text-align:center;">
+                <?php echo esc_html($qv_avail['message']); ?>
+            </p>
+            <?php endif; ?>
         </div>
     </div>
     <?php

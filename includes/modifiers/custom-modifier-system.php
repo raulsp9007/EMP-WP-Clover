@@ -853,7 +853,12 @@ class Custom_Modifier_System
                 var servingsCount = parseInt($('#servings-count').val()) || 1;
                 var allValid = true;
 
-                for (var s = 1; s <= servingsCount; s++) {
+                // Category hours take priority — PHP injects hidden input when closed
+                if ($('#category-hours-closed').val() === '1') {
+                    allValid = false;
+                }
+
+                if (allValid) for (var s = 1; s <= servingsCount; s++) {
                     $('.modifier-group[data-serving="' + s + '"]').each(function() {
                         var groupConstraintText = $(this).find('.modifier-constraint').text();
                         var groupCheckboxes = $(this).find('input[type="checkbox"]');

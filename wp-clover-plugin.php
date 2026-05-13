@@ -338,9 +338,11 @@ function clover_is_category_closed($category_id)
 
     foreach ($day_config['elements'] as $interval) {
         if (isset($interval['start']) && isset($interval['end'])) {
-            $start = $interval['start'];
-            $end = $interval['end'];
-            
+            // Stored as HHMM integer (e.g. 900 = 9:00 AM, 2200 = 10:00 PM).
+            // Convert to minutes-since-midnight before comparing with $current_minutes.
+            $start = (int)floor($interval['start'] / 100) * 60 + ($interval['start'] % 100);
+            $end   = (int)floor($interval['end']   / 100) * 60 + ($interval['end']   % 100);
+
             if ($end < $start) { // Overnight
                 if ($current_minutes >= $start || $current_minutes < $end) {
                     return false; // Open
@@ -363,11 +365,6 @@ function clover_is_category_closed($category_id)
  */
 function clover_get_product_availability($product_id)
 {
-    $prevent_orders = get_option('clover_prevent_orders_when_closed', '0');
-    if ($prevent_orders !== '1') {
-        return ['available' => true, 'message' => ''];
-    }
-
     $business_hours = new \Src\BusinessHours\Business_Hours();
 
     // 1. Store hours first

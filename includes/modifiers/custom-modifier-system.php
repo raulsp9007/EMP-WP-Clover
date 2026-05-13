@@ -428,16 +428,23 @@ class Custom_Modifier_System
                     $clover_id = isset($modifier['clover_id']) ? esc_attr($modifier['clover_id']) : '';
 
                     // Apply global discount if enabled
-                    $discount_enabled = get_option('clover_global_discount_enabled', '0');
-                    $discount_percent = get_option('clover_global_discount_percent', '10');
+                    $discount_enabled   = get_option('clover_global_discount_enabled', '0');
+                    $discount_percent   = get_option('clover_global_discount_percent', '10');
                     $apply_to_modifiers = get_option('clover_global_discount_apply_modifiers', '0');
+
+                    // Apply Clover discount (from Discounts tab) if enabled
+                    $clover_disc_apply   = get_option('clover_discount_apply_to_orders', '0');
+                    $clover_disc_percent = floatval(get_option('clover_discount_cached_percent', '0'));
 
                     $display_price = $modifier_price;
                     $show_discount = false;
 
                     if ($discount_enabled === '1' && $discount_percent > 0 && $apply_to_modifiers === '1') {
-                        $discount = floatval($discount_percent) / 100;
+                        $discount      = floatval($discount_percent) / 100;
                         $display_price = $original_modifier_price * (1 - $discount);
+                        $show_discount = true;
+                    } elseif ($clover_disc_apply === '1' && $clover_disc_percent > 0) {
+                        $display_price = $original_modifier_price * (1 - $clover_disc_percent / 100);
                         $show_discount = true;
                     }
 
@@ -995,31 +1002,30 @@ class Custom_Modifier_System
                     // We're on single product page - update page price
                     console.log('=== SINGLE PRODUCT PAGE - Updating price ===');
 
-                    // When discount is enabled, price has structure: <del>original</del> <ins>sale</ins>
-                    // We need to update ONLY the <ins> (sale price), not the <del> (original)
-                    var $salePriceIns = $('ins.woocommerce-Price-amount.amount').first();
+                    // Find the price wrapper on the single product page
+                    var $priceWrapper = $('.summary .price').first();
+                    if ($priceWrapper.length === 0) $priceWrapper = $('.entry-summary .price').first();
+                    if ($priceWrapper.length === 0) $priceWrapper = $('.product .price').first();
 
-                    if ($salePriceIns.length > 0) {
-                        console.log('Updating sale price (ins tag)');
-                        $salePriceIns.text(currencySymbol + formattedTotalPrice);
-                    } else {
-                        // No sale price structure, update normal price
-                        var $priceBdi = $('.woocommerce-Price-amount bdi').first();
-                        if ($priceBdi.length > 0) {
-                            console.log('Updating normal price');
-                            $priceBdi.text(currencySymbol + formattedTotalPrice);
+                    if ($priceWrapper.length > 0) {
+                        if (modifiersPrice > 0) {
+                            // Show base crossed out + combined (sale price style)
+                            var baseFormatted = currencySymbol + parseFloat(originalBasePrice).toFixed(2);
+                            $priceWrapper.html(
+                                '<del aria-hidden="true"><span class="woocommerce-Price-amount amount"><bdi>' + baseFormatted + '</bdi></span></del> ' +
+                                '<ins><span class="woocommerce-Price-amount amount"><bdi>' + currencySymbol + formattedTotalPrice + '</bdi></span></ins>'
+                            );
                         } else {
-                            // Fallback: try to find any price element
-                            var $priceAmount = $('.woocommerce-Price-amount.amount').first();
-                            if ($priceAmount.length > 0) {
-                                var $bdi = $priceAmount.find('bdi').first();
-                                if ($bdi.length > 0) {
-                                    $bdi.text(currencySymbol + formattedTotalPrice);
-                                } else {
-                                    $priceAmount.text(currencySymbol + formattedTotalPrice);
-                                }
-                            }
+                            // Restore plain base price
+                            $priceWrapper.html('<span class="woocommerce-Price-amount amount"><bdi>' + currencySymbol + formattedTotalPrice + '</bdi></span>');
                         }
+                    }
+
+                    // Update Add to Cart button to always show current price
+                    var $addToCartBtn = $('button.single_add_to_cart_button');
+                    if ($addToCartBtn.length > 0) {
+                        var btnText = $addToCartBtn.text().replace(/\s*-\s*\$[\d.,]+$/, '').trim();
+                        $addToCartBtn.text(btnText + ' - ' + currencySymbol + formattedTotalPrice);
                     }
                 }
             }
@@ -1033,6 +1039,9 @@ class Custom_Modifier_System
                     validateConstraints(portion);
                 }, 1000, p);
             }
+
+            // Initialize button price on page load
+            updateProductPrice();
         });
         </script>
         <style>
@@ -1281,7 +1290,7 @@ class Custom_Modifier_System
         $apply_discount = ($discount_enabled === '1' && $discount_percent > 0 && $apply_to_modifiers === '1');
         $discount_multiplier = 1 - (floatval($discount_percent) / 100);
 
-        foreach ($cart->get_cart() as $cart_item) {
+        foreach ($cart->get_cart() as $cart_item_key => $cart_item) {
             if (isset($cart_item['custom_modifiers']) && is_array($cart_item['custom_modifiers'])) {
                 $product_id = $cart_item['product_id'];
                 $modifiers_json = get_post_meta($product_id, '_clover_modifiers', true);
@@ -1325,8 +1334,8 @@ class Custom_Modifier_System
                         }
                     }
 
-                    // Store charged modifier data in cart item for persistence to order
-                    $cart_item['clover_charged_modifiers'] = $charged_modifiers;
+                    // Store charged modifier data in the actual WC cart session (not the local copy)
+                    WC()->cart->cart_contents[$cart_item_key]['clover_charged_modifiers'] = $charged_modifiers;
 
                     // Get base price from database (before ANY filters)
                     $base_price = get_post_meta($product_id, '_regular_price', true);
@@ -1388,6 +1397,18 @@ class Custom_Modifier_System
                 $apply_to_modifiers = get_option('clover_global_discount_apply_modifiers', '0');
                 $show_discount = ($discount_enabled === '1' && $discount_percent > 0 && $apply_to_modifiers === '1');
 
+                // Prepend base price as first line so customer sees the breakdown
+                $base_price = floatval(get_post_meta($product_id, '_regular_price', true));
+                if ($base_price > 0) {
+                    if ($discount_enabled === '1' && floatval($discount_percent) > 0) {
+                        $base_price = $base_price * (1 - floatval($discount_percent) / 100);
+                    }
+                    $item_data[] = array(
+                        'key'   => __('Base price', 'woocommerce'),
+                        'value' => wc_price($base_price),
+                    );
+                }
+
                 foreach ($selected_modifiers as $serving_key => $serving_modifiers) {
                     // Extract serving number from key (e.g., "1" from "1" or "serving_1")
                     $serving_num = is_numeric($serving_key)
@@ -1437,6 +1458,7 @@ class Custom_Modifier_System
 
         return $item_data;
     }
+
 
     /**
      * Add modifier data to order items

@@ -32,274 +32,265 @@ class WPOrders_Integration
 
     public function send_order_to_api($order_id)
     {
-        // Check if order has already been processed to prevent duplicates
         $order = wc_get_order($order_id);
-        if (!$order)
-            return;
+        if (!$order) return;
 
-        clover_log('Order: ' . print_r($order, true));
-
-        // Check if this order has already been successfully sent to the API - EARLY EXIT IF ALREADY SENT
         $already_sent = $order->get_meta('_clover_api_sent', true);
         if (!empty($already_sent)) {
             clover_log("WPOrders: Order {$order_id} already sent to Clover API, skipping duplicate.");
             return;
         }
 
-        $config = require __DIR__ . '/../config/api.php';
+        $config       = require __DIR__ . '/../config/api.php';
         $orderService = new \Src\Services\OrderService($config);
 
-        // Note: Payment status is now handled via payment records API, not order state field
+        // Discount settings
+        $disc_enabled = get_option('clover_global_discount_enabled', '0');
+        $disc_percent = floatval(get_option('clover_global_discount_percent', '0'));
+        $disc_on_mods = get_option('clover_global_discount_apply_modifiers', '0');
 
-        // Calcular el total de la orden basado en items y modificadores
-        $totalAmount = 0;
+        // Tax rates to apply on every line item (ad-hoc items accept taxRates)
+        $enabled_tax_ids  = get_option('clover_enabled_tax_rates', []);
+        if (!is_array($enabled_tax_ids)) $enabled_tax_ids = [];
+        $all_tax_rates    = json_decode(get_option('clover_tax_rates_cache', '[]'), true) ?: [];
+        $line_item_taxes  = array_values(array_map(
+            fn($tr) => ['id' => $tr['id']],
+            array_filter($all_tax_rates, fn($tr) => in_array($tr['id'], $enabled_tax_ids))
+        ));
+
+        // Build line items — ad-hoc (no item.id) so taxRates overrides are respected by Clover
         $lineItems = [];
-        $note_lines = [];
 
         foreach ($order->get_items() as $item) {
             $product = $item->get_product();
-            if (!$product)
-                continue;
+            if (!$product) continue;
 
-            // SKU o meta del producto
             $external_id = $product->get_sku();
-            if (empty($external_id))
-                continue;
+            if (empty($external_id)) continue;
 
-            // Obtener el precio del producto (ya incluye modificadores si se calcularon correctamente)
-            $item_total = floatval($item->get_total());  // Total real del item (con modificadores incluidos)
-            $quantity = $item->get_quantity();
+            // Build inline modifications from _custom_modifier_data
+            $modifications    = [];
+            $custom_modifiers = null;
 
-            clover_log('Item ID: ' . $item->get_id() . ' - Item total (with modifiers): ' . $item_total . ' - Quantity: ' . $quantity);
+            foreach ($item->get_meta_data() as $meta) {
+                if ($meta->key === '_custom_modifier_data' || $meta->key === 'custom_modifiers') {
+                    $custom_modifiers = $meta->value;
+                    break;
+                }
+            }
 
-            // El total ya incluye los modificadores gracias a woocommerce_before_calculate_totals
-            $item_total_with_addons = $item_total;
-            $totalAmount += $item_total_with_addons;
+            if (is_array($custom_modifiers)) {
+                foreach ($custom_modifiers as $mod_data) {
+                    $modifier_clover_id = $mod_data['clover_id'] ?? ($mod_data['id'] ?? null);
+                    if (!$modifier_clover_id) continue;
 
-            // Agregar el item a la lista de items de Clover
-            $lineItems[] = [
-                'item' => [
-                    'id' => $external_id,
-                    'price' => intval($item_total_with_addons * 100)
-                ],
-                'name' => $product->get_name(),
-                'quantity' => $quantity
+                    $original_price  = floatval($mod_data['original_price'] ?? ($mod_data['price'] ?? 0));
+                    $effective_price = $original_price;
+
+                    if ($disc_enabled === '1' && $disc_percent > 0 && $disc_on_mods === '1') {
+                        $effective_price = $original_price * (1 - $disc_percent / 100);
+                    }
+
+                    $modifications[] = [
+                        'modifier' => ['id' => $modifier_clover_id],
+                        'name'     => $mod_data['name'] ?? '',
+                        'amount'   => intval(round($effective_price * 100)),
+                    ];
+                }
+            }
+
+            // Price: use product base price only (get_subtotal includes modifier prices — send those separately via modifications[])
+            $base_price = floatval(get_post_meta($product->get_id(), '_regular_price', true));
+            if ($base_price <= 0) $base_price = floatval($product->get_price());
+
+            // Apply active discount manually (price filters may not fire in backend context)
+            $tab_apply = get_option('clover_discount_apply_to_orders', '0');
+            $tab_pct   = floatval(get_option('clover_discount_cached_percent', '0'));
+            if ($disc_enabled === '1' && $disc_percent > 0) {
+                $base_price = $base_price * (1 - $disc_percent / 100);
+            } elseif ($tab_apply === '1' && $tab_pct > 0) {
+                $base_price = $base_price * (1 - $tab_pct / 100);
+            }
+
+            $unit_price_cents = intval(round($base_price * 100));
+
+            $line_item = [
+                'name'  => $product->get_name(),
+                'price' => $unit_price_cents,
             ];
+
+            if (!empty($line_item_taxes)) {
+                $line_item['taxRates'] = $line_item_taxes;
+            }
+
+            if (!empty($modifications)) {
+                $line_item['modifications'] = $modifications;
+            }
+
+            $lineItems[] = $line_item;
         }
 
-        // Unir todas las líneas en una sola nota
-        $customer_note = $order->get_customer_note();
+        // Delivery fee — add as ad-hoc line item (no taxRates, no item.id)
+        $shipping_total = floatval($order->get_shipping_total());
+        if ($shipping_total > 0) {
+            $shipping_methods_raw = $order->get_shipping_methods();
+            $shipping_label       = 'Delivery Fee';
+            if (!empty($shipping_methods_raw)) {
+                $sm = reset($shipping_methods_raw);
+                $shipping_label = $sm->get_method_title() ?: $sm->get_name() ?: 'Delivery Fee';
+            }
+            $lineItems[] = [
+                'name'  => $shipping_label,
+                'price' => intval(round($shipping_total * 100)),
+                // No taxRates — delivery fee is tax-exempt
+            ];
+            clover_log("DELIVERY FEE: '{$shipping_label}' = \${$shipping_total}");
+        }
 
-        // Get customer name: Logged in user OR Billing Name for guests
-        $user_id = $order->get_customer_id();
+        // Note
+        $customer_note = $order->get_customer_note();
+        $user_id       = $order->get_customer_id();
         $customer_name = '';
 
         if ($user_id > 0) {
-            // Logged in user
             $user = get_user_by('id', $user_id);
-            if ($user) {
-                $customer_name = trim($user->first_name . ' ' . $user->last_name);
-            }
+            if ($user) $customer_name = trim($user->first_name . ' ' . $user->last_name);
         } else {
-            // Guest user: Use billing name
             $customer_name = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
         }
 
-        // Build the note with customer name
-        $note = '';
+        $note = trim(
+            (!empty($customer_name) ? $customer_name . '. ' : '') .
+            (!empty($customer_note) ? 'Special instructions: ' . $customer_note : '')
+        );
 
-        if (!empty($customer_name)) {
-            $note .= $customer_name . '. ';
-        }
-
-        if (!empty($customer_note)) {
-            $note .= 'Special instructions: ' . $customer_note;
-        }
-
-        $note = trim($note);
-
-        clover_log('Order Total Amount (with modifiers): ' . $totalAmount);
-        clover_log('Order Total in Cents: ' . ($totalAmount * 100));
-
-        // Check if the logged-in user has a Clover customer ID
-        $current_user_id = get_current_user_id();
-        $clover_customer_id = get_user_meta($current_user_id, 'clover_customer_id', true);
-
-        // Construir el body para crear la orden en Clover
-        $employee_id = get_option('clover_employee_id', '');
-
-        // Resolve Clover Order Type from shipping method mapping, fallback to default
+        // Order type
         $clover_order_type_id = null;
-        $shipping_methods = $order->get_shipping_methods();
+        $shipping_methods     = $order->get_shipping_methods();
 
         if (!empty($shipping_methods)) {
-            $shipping_method = reset($shipping_methods);
-            $map_key = $shipping_method->get_method_id() . ':' . $shipping_method->get_instance_id();
-            $order_type_map = get_option('clover_order_type_map', array());
-            if (is_array($order_type_map) && !empty($order_type_map[$map_key])) {
+            $shipping_method  = reset($shipping_methods);
+            $map_key          = $shipping_method->get_method_id() . ':' . $shipping_method->get_instance_id();
+            $order_type_map   = get_option('clover_order_type_map', []);
+            if (!empty($order_type_map[$map_key])) {
                 $clover_order_type_id = $order_type_map[$map_key];
-                clover_log("WPOrders: Order type resolved from mapping key '{$map_key}': {$clover_order_type_id}");
             }
         }
 
         if (empty($clover_order_type_id)) {
             $clover_order_type_id = get_option('clover_default_order_type_id', '');
-            if (!empty($clover_order_type_id)) {
-                clover_log("WPOrders: Order type resolved from default: {$clover_order_type_id}");
-            } else {
-                clover_log('WPOrders: No order type configured — orderType field will be omitted.');
-            }
         }
 
-        $body = [
-            'note' => $note,
-            'total' => $totalAmount * 100,  // Clover usa centavos
+        // Build orderCart
+        $orderCart = [
+            'lineItems' => $lineItems,
+            'note'      => $note,
+            'total'     => intval(round(floatval($order->get_total()) * 100)),
         ];
 
         if (!empty($clover_order_type_id)) {
-            $body['orderType'] = ['id' => $clover_order_type_id];
+            $orderCart['orderType'] = ['id' => $clover_order_type_id];
         }
 
-        // Add employee only if configured
+        $employee_id = get_option('clover_employee_id', '');
         if (!empty($employee_id)) {
-            $body['employee'] = [
-                'id' => $employee_id
+            $orderCart['employee'] = ['id' => $employee_id];
+        }
+
+        $current_user_id    = get_current_user_id();
+        $clover_customer_id = get_user_meta($current_user_id, 'clover_customer_id', true);
+
+        if (!empty($clover_customer_id)) {
+            $customer_data = ['id' => $clover_customer_id];
+            $wp_user       = get_user_by('ID', $current_user_id);
+            if ($wp_user) {
+                $customer_data['firstName'] = $wp_user->first_name ?: $wp_user->display_name;
+                $customer_data['lastName']  = $wp_user->last_name ?: '';
+            }
+            $orderCart['customers'] = [$customer_data];
+        }
+
+        $clover_discount_apply = get_option('clover_discount_apply_to_orders', '0');
+        $clover_discount_id    = get_option('clover_discount_id', '');
+        if ($clover_discount_apply === '1' && !empty($clover_discount_id)) {
+            $orderCart['discounts'] = [
+                ['discount' => ['id' => $clover_discount_id]],
             ];
         }
 
-        // Add customer reference if user has Clover customer ID
-        if (!empty($clover_customer_id)) {
-            // Get customer name from WordPress user data
-            $user = get_user_by('ID', $current_user_id);
-            $customer_data = array(
-                'id' => $clover_customer_id
-            );
 
-            if ($user) {
-                $customer_data['firstName'] = $user->first_name ?: $user->display_name;
-                $customer_data['lastName'] = $user->last_name ?: '';
-            }
-
-            $body['customers'] = array($customer_data);
-            clover_log('WPOrders: Adding customer to order: ' . json_encode($customer_data));
-        } else {
-            clover_log('WPOrders: No Clover customer ID found for user ' . $current_user_id);
-        }
-
-        if (empty($body)) {
-            clover_log('WPOrders: No data to send, order not sent');
-            return;
-        }
+        $payload = ['orderCart' => $orderCart];
 
         try {
-            // Log the API request details
-            clover_log('CLOVER API REQUEST - Creating Order:');
-            clover_log('URL: ' . $orderService->getBaseUrl() . '/orders');
-            clover_log('HEADERS: ' . print_r($orderService->getHeaders(), true));
-            clover_log('BODY: ' . json_encode($body, JSON_PRETTY_PRINT));
+            clover_log('ATOMIC ORDER PAYLOAD: ' . json_encode($payload, JSON_PRETTY_PRINT));
 
-            // Crear la orden en Clover
-            $response = $orderService->createOrder($body);
-            clover_log('ORDER CREATION API RESPONSE: ' . print_r($response, true));
+            $response = $orderService->createAtomicOrder($payload);
+            clover_log('ATOMIC ORDER RESPONSE: ' . print_r($response, true));
 
-            // Verificar si la creación fue exitosa
             if (isset($response['status']) && $response['status'] >= 200 && $response['status'] < 300 && isset($response['data']['id'])) {
                 $cloverOrderId = $response['data']['id'];
-                clover_log("CLOVER ORDER CREATED SUCCESSFULLY with ID: {$cloverOrderId}");
+                clover_log("ATOMIC ORDER CREATED: {$cloverOrderId}");
 
-                // Ahora enviar los ítems individuales a la orden creada
-                $itemsPayload = $this->prepareItemsPayload($order);
+                // Clover ignores employee in atomic order payload — patch explicitly
+                if (!empty($employee_id)) {
+                    $orderService->updateOrder($cloverOrderId, ['employee' => ['id' => $employee_id]]);
+                    clover_log("EMPLOYEE PATCHED: {$employee_id} on order {$cloverOrderId}");
+                }
 
-                // Log the bulk items API request details
-                clover_log("CLOVER API REQUEST - Adding Bulk Line Items to Order: {$cloverOrderId}");
-                clover_log('URL: ' . $orderService->getBaseUrl() . "/orders/{$cloverOrderId}/bulk_line_items");
-                clover_log('HEADERS: ' . print_r($orderService->getHeaders(), true));
-                clover_log('PAYLOAD: ' . json_encode($itemsPayload, JSON_PRETTY_PRINT));
+                // Mark as paid
+                $auto_mark_paid = get_option('clover_auto_mark_as_paid', '1');
+                if ($auto_mark_paid === '1') {
+                    $tender_id = get_option('clover_payment_tender_id', '');
+                    if (!empty($tender_id)) {
+                        try {
+                            $order_total_cents = intval(round(floatval($order->get_total()) * 100));
+                            $paymentResponse   = $orderService->createPaymentForOrder($cloverOrderId, $tender_id, $order_total_cents);
 
-                // Enviar los ítems a la orden creada
-                $bulkItemsResponse = $orderService->addBulkLineItems($cloverOrderId, $itemsPayload);
-                clover_log('BULK LINE ITEMS API RESPONSE: ' . print_r($bulkItemsResponse, true));
-
-                // Verificar si la adición de ítems fue exitosa
-                if (isset($bulkItemsResponse['status']) && $bulkItemsResponse['status'] >= 200 && $bulkItemsResponse['status'] < 300 && isset($bulkItemsResponse['data'])) {
-                    clover_log("BULK LINE ITEMS ADDED SUCCESSFULLY to Order: {$cloverOrderId}");
-
-                    // Procesar modificadores para cada item
-                    $this->processModifiers($order, $orderService, $cloverOrderId, $bulkItemsResponse);
-
-                    // Mark order as paid using payment record API (if enabled)
-                    $auto_mark_paid = get_option('clover_auto_mark_as_paid', '1');
-                    if ($auto_mark_paid === '1') {
-                        $tender_id = get_option('clover_payment_tender_id', '');
-                        if (!empty($tender_id)) {
-                            clover_log("PAYMENT STATUS: Creating payment record for order {$cloverOrderId} with tender {$tender_id}");
-                            try {
-                                $order_total_cents = intval($totalAmount * 100);
-                                $paymentResponse = $orderService->createPaymentForOrder($cloverOrderId, $tender_id, $order_total_cents);
-
-                                if (isset($paymentResponse['status']) && $paymentResponse['status'] >= 200 && $paymentResponse['status'] < 300) {
-                                    clover_log("PAYMENT STATUS: Order {$cloverOrderId} marked as PAID successfully");
-                                    $order->add_order_note('Order marked as paid via API (Tender: ' . $tender_id . ')');
-                                } else {
-                                    clover_log("PAYMENT STATUS: Failed to mark order {$cloverOrderId} as paid. Status: " . ($paymentResponse['status'] ?? 'unknown'));
-                                    $order->add_order_note('Failed to mark order as paid via API');
-                                }
-                            } catch (\Exception $paymentException) {
-                                clover_log('PAYMENT STATUS ERROR: ' . $paymentException->getMessage());
-                                $order->add_order_note('Payment status error: ' . $paymentException->getMessage());
+                            if (isset($paymentResponse['status']) && $paymentResponse['status'] >= 200 && $paymentResponse['status'] < 300) {
+                                clover_log("PAYMENT: Order {$cloverOrderId} marked as paid");
+                                $order->add_order_note('Order marked as paid via API (Tender: ' . $tender_id . ')');
+                            } else {
+                                clover_log("PAYMENT FAILED for {$cloverOrderId}: " . print_r($paymentResponse['data'] ?? [], true));
+                                $order->add_order_note('Failed to mark order as paid via API');
                             }
-                        } else {
-                            clover_log("PAYMENT STATUS: No tender ID configured. Order {$cloverOrderId} will NOT be marked as paid automatically.");
+                        } catch (\Exception $e) {
+                            clover_log('PAYMENT ERROR: ' . $e->getMessage());
+                            $order->add_order_note('Payment error: ' . $e->getMessage());
                         }
                     } else {
-                        clover_log("PAYMENT STATUS: Auto-mark as paid is DISABLED. Order {$cloverOrderId} will arrive as UNPAID in Clover.");
+                        clover_log("PAYMENT: No tender ID configured — order will be UNPAID in Clover.");
                     }
-
-                    // Auto-print order if enabled
-                    $auto_print = get_option('clover_auto_print_orders', '1');
-                    if ($auto_print === '1') {
-                        clover_log("AUTO-PRINT: Attempting to print order {$cloverOrderId}");
-                        try {
-                            $printResponse = $orderService->printOrder($cloverOrderId);
-                            if (isset($printResponse['status']) && $printResponse['status'] >= 200 && $printResponse['status'] < 300) {
-                                clover_log("AUTO-PRINT: Order {$cloverOrderId} sent to printer successfully");
-                                $order->add_order_note('Order sent to Clover printer');
-                            } else {
-                                clover_log("AUTO-PRINT: Failed to print order {$cloverOrderId}. Status: " . ($printResponse['status'] ?? 'unknown'));
-                                $order->add_order_note('Failed to send order to Clover printer');
-                            }
-                        } catch (\Exception $printException) {
-                            clover_log('AUTO-PRINT ERROR: ' . $printException->getMessage());
-                            $order->add_order_note('Print error: ' . $printException->getMessage());
-                        }
-                    }
-
-                    // Marcar la orden como enviada para prevenir duplicados - ONLY AFTER SUCCESSFUL API CALL
-                    $order->update_meta_data('_clover_api_sent', time());
-
-                    // Guardar el ID de la orden de Clover
-                    $order->update_meta_data('_clover_order_id', $cloverOrderId);
-
-                    $order->save();
-
-                    clover_log("WPOrders: Order {$order_id} successfully sent to Clover API with ID: {$cloverOrderId}");
-                } else {
-                    clover_log('WPOrders: Failed to add bulk line items to order in Clover API. Status: ' . ($bulkItemsResponse['status'] ?? 'unknown') . ' Response: ' . print_r($bulkItemsResponse['data'] ?? [], true));
-                    $order->add_order_note('Failed to add line items to Clover order ' . $cloverOrderId . '. Order exists in Clover but is empty.');
-                    // Do NOT mark as sent — allow retry on next status change
                 }
-            } else {
-                clover_log('WPOrders: Failed to create order in Clover API. Status: ' . ($response['status'] ?? 'unknown'));
 
-                // DON'T mark as sent if the main order creation failed - allow retries for genuine API failures
-                // Only log the failure for monitoring
-                $order->add_order_note('Failed to send order to Clover API. Will retry on next attempt.');
+                // Auto-print
+                $auto_print = get_option('clover_auto_print_orders', '1');
+                if ($auto_print === '1') {
+                    try {
+                        $printResponse = $orderService->printOrder($cloverOrderId);
+                        if (isset($printResponse['status']) && $printResponse['status'] >= 200 && $printResponse['status'] < 300) {
+                            clover_log("PRINT: Order {$cloverOrderId} sent to printer");
+                            $order->add_order_note('Order sent to Clover printer');
+                        } else {
+                            clover_log("PRINT FAILED for {$cloverOrderId}: status " . ($printResponse['status'] ?? 'unknown'));
+                        }
+                    } catch (\Exception $e) {
+                        clover_log('PRINT ERROR: ' . $e->getMessage());
+                    }
+                }
+
+                $order->update_meta_data('_clover_api_sent', time());
+                $order->update_meta_data('_clover_order_id', $cloverOrderId);
+                $order->save();
+
+                clover_log("WPOrders: Order {$order_id} sent to Clover as {$cloverOrderId}");
+
+            } else {
+                clover_log('ATOMIC ORDER FAILED: status=' . ($response['status'] ?? 'unknown') . ' data=' . print_r($response['data'] ?? [], true));
+                $order->add_order_note('Failed to send order to Clover. Check logs.');
             }
         } catch (\Exception $e) {
-            clover_log('CREATE ORDER API ERROR: ' . $e->getMessage());
-
-            // DON'T mark as sent if there was an exception - allow retries for genuine API failures
-            $order->add_order_note('API error when sending order to Clover: ' . $e->getMessage());
+            clover_log('ATOMIC ORDER ERROR: ' . $e->getMessage());
+            $order->add_order_note('API error: ' . $e->getMessage());
         }
     }
 
@@ -417,7 +408,27 @@ class WPOrders_Integration
                             if ($modifierId) {
                                 clover_log("PROCESSING CUSTOM MODIFIER ID: {$modifierId} for line item {$lineItemId}");
 
-                                $modifierPrice = isset($mod_data['price']) ? intval(floatval($mod_data['price']) * 100) : null;
+                                // Always derive effective price from original_price + current discount settings
+                                // to avoid sending original price when a discount is active
+                                $original_price = isset($mod_data['original_price'])
+                                    ? floatval($mod_data['original_price'])
+                                    : (isset($mod_data['price']) ? floatval($mod_data['price']) : 0);
+
+                                $effective_price = $original_price;
+                                $disc_enabled  = get_option('clover_global_discount_enabled', '0');
+                                $disc_percent  = floatval(get_option('clover_global_discount_percent', '0'));
+                                $disc_on_mods  = get_option('clover_global_discount_apply_modifiers', '0');
+
+                                clover_log("MODIFIER DISCOUNT DEBUG — original_price: {$original_price} | disc_enabled: '{$disc_enabled}' | disc_percent: {$disc_percent} | disc_on_mods: '{$disc_on_mods}'");
+
+                                if ($disc_enabled === '1' && $disc_percent > 0 && $disc_on_mods === '1') {
+                                    $effective_price = $original_price * (1 - $disc_percent / 100);
+                                    clover_log("MODIFIER DISCOUNT APPLIED — effective_price: {$effective_price}");
+                                } else {
+                                    clover_log("MODIFIER DISCOUNT NOT APPLIED — condition failed: disc_enabled={$disc_enabled}, disc_percent={$disc_percent}, disc_on_mods={$disc_on_mods}");
+                                }
+
+                                $modifierPrice = $original_price > 0 ? intval(round($effective_price * 100)) : null;
 
                                 $modifierPayload = [
                                     'modifier' => [
@@ -426,8 +437,8 @@ class WPOrders_Integration
                                 ];
 
                                 if ($modifierPrice !== null && $modifierPrice > 0) {
-                                    $modifierPayload['modifier']['price'] = $modifierPrice;
-                                    clover_log("ADDING MODIFIER PRICE (stored from checkout): {$modifierPrice} cents");
+                                    $modifierPayload['amount'] = $modifierPrice;
+                                    clover_log("ADDING MODIFIER PRICE via amount field: {$modifierPrice} cents (original: " . intval($original_price * 100) . " cents)");
                                 }
 
                                 // Log the modifier API request details

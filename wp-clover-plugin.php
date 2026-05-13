@@ -4,7 +4,7 @@
  * Plugin Name: WPCloverSync
  * Description: A plugin to sync WP and Clover via API
  * Version: 1.0.1
- * Author: MML1357
+ * Author: Ermis Media Production
  */
 
 // Prevent direct access
@@ -221,6 +221,134 @@ function clover_force_product_on_sale($is_on_sale, $product)
     }
     
     return $is_on_sale;
+}
+
+// ── Clover Discount tab: visual price display ────────────────────────────────
+
+add_filter('woocommerce_product_get_price', 'clover_apply_tab_discount_price', 25, 2);
+add_filter('woocommerce_product_get_regular_price', 'clover_apply_tab_discount_price', 25, 2);
+
+function clover_apply_tab_discount_price($price, $product)
+{
+    if (is_admin()) return $price;
+    // Global discount takes priority — avoid double discount
+    if (get_option('clover_global_discount_enabled', '0') === '1') return $price;
+
+    $apply   = get_option('clover_discount_apply_to_orders', '0');
+    $percent = floatval(get_option('clover_discount_cached_percent', '0'));
+
+    if ($apply !== '1' || $percent <= 0 || !is_numeric($price) || $price <= 0) return $price;
+
+    return $price * (1 - $percent / 100);
+}
+
+add_filter('woocommerce_get_price_html', 'clover_tab_discount_price_html', 15, 2);
+
+function clover_tab_discount_price_html($price_html, $product)
+{
+    if (get_option('clover_global_discount_enabled', '0') === '1') return $price_html;
+
+    $apply   = get_option('clover_discount_apply_to_orders', '0');
+    $percent = floatval(get_option('clover_discount_cached_percent', '0'));
+
+    clover_log("TAB DISCOUNT HTML — apply={$apply} percent={$percent} product=" . $product->get_id());
+
+    if ($apply !== '1' || $percent <= 0) return $price_html;
+
+    $regular_price = get_post_meta($product->get_id(), '_regular_price', true);
+    if (empty($regular_price)) return $price_html;
+
+    $sale_price = floatval($regular_price) * (1 - $percent / 100);
+    $price_html = '<del aria-hidden="true" class="woocommerce-Price-amount amount">' . strip_tags(wc_price($regular_price)) . '</del> <ins class="woocommerce-Price-amount amount">' . strip_tags(wc_price($sale_price)) . '</ins>';
+
+    return $price_html;
+}
+
+add_filter('woocommerce_product_is_on_sale', 'clover_tab_discount_is_on_sale', 15, 2);
+
+function clover_tab_discount_is_on_sale($is_on_sale, $product)
+{
+    if (get_option('clover_global_discount_enabled', '0') === '1') return $is_on_sale;
+
+    $apply   = get_option('clover_discount_apply_to_orders', '0');
+    $percent = floatval(get_option('clover_discount_cached_percent', '0'));
+
+    if ($apply === '1' && $percent > 0 && $product->get_price() > 0) return true;
+
+    return $is_on_sale;
+}
+
+// Auto-sync discount cached percent when discount ID is saved
+add_action('updated_option', function ($option, $old, $new) {
+    if ($option !== 'clover_discount_id' || empty($new)) return;
+    try {
+        $config       = require CLOVER_PLUGIN_PATH . 'config/api.php';
+        $orderService = new \Src\Services\OrderService($config);
+        $response     = $orderService->getDiscounts();
+        if (isset($response['data']['elements'])) {
+            foreach ($response['data']['elements'] as $d) {
+                if (($d['id'] ?? '') === $new) {
+                    $percent = isset($d['percentage']) ? intval($d['percentage']) : 0;
+                    update_option('clover_discount_cached_percent', $percent);
+                    clover_log("DISCOUNT SYNC: cached percent={$percent} for discount {$new}");
+                    break;
+                }
+            }
+        }
+    } catch (Exception $e) {
+        clover_log('DISCOUNT SYNC ERROR: ' . $e->getMessage());
+    }
+}, 10, 3);
+
+// ── Service charge as WooCommerce cart fee ────────────────────────────────────
+add_action('woocommerce_cart_calculate_fees', 'clover_add_service_charge_fee');
+function clover_add_service_charge_fee($cart)
+{
+    if (is_admin() && !defined('DOING_AJAX')) return;
+
+    $enabled_ids = get_option('clover_enabled_tax_rates', []);
+    if (!is_array($enabled_ids) || empty($enabled_ids)) return;
+
+    $all_rates = json_decode(get_option('clover_tax_rates_cache', '[]'), true) ?: [];
+
+    foreach ($all_rates as $tr) {
+        if (empty($tr['id'])) continue;
+        if (!in_array($tr['id'], $enabled_ids)) continue;
+
+        $pct_display = $tr['rate'] / 100000; // e.g. 3.0 for 3%
+        if ($pct_display <= 0) continue;
+
+        $fee_amount = $cart->get_subtotal() * ($pct_display / 100);
+        $label = ($tr['name'] ?? 'Fee') . ' (' . rtrim(rtrim(number_format($pct_display, 4), '0'), '.') . '%)';
+        $cart->add_fee($label, $fee_amount, false);
+    }
+}
+
+// ── Settings audit log ───────────────────────────────────────────────────────
+
+add_action('updated_option', 'clover_settings_audit_log', 10, 3);
+
+function clover_settings_audit_log($option_name, $old_value, $new_value)
+{
+    if (strpos($option_name, 'clover_') !== 0) return;
+
+    $log_dir  = CLOVER_PLUGIN_PATH . 'logs/';
+    $log_file = $log_dir . 'settings-audit.log';
+
+    if (!is_dir($log_dir)) {
+        @mkdir($log_dir, 0755, true);
+    }
+
+    $user     = wp_get_current_user();
+    $username = ($user && $user->ID) ? $user->user_login : 'system';
+    $date     = date('Y-m-d H:i:s');
+    $old_str  = is_array($old_value) ? json_encode($old_value) : (string) $old_value;
+    $new_str  = is_array($new_value) ? json_encode($new_value) : (string) $new_value;
+
+    if ($old_str === $new_str) return;
+
+    $entry = "[{$date}] [{$username}] {$option_name}: \"{$old_str}\" → \"{$new_str}\"\n";
+    @file_put_contents($log_file, $entry, FILE_APPEND | LOCK_EX);
 }
 
 // Enqueue frontend scripts for cart/checkout and product pages
@@ -694,10 +822,8 @@ function clover_reload_employees()
                         : (($employee['firstName'] ?? '') . ' ' . ($employee['lastName'] ?? ''))
                 );
                 $employees[] = array(
-                    'id'        => $employee['id'] ?? '',
-                    'name'      => $full_name ?: ($employee['id'] ?? ''),
-                    'firstName' => $employee['firstName'] ?? '',
-                    'lastName'  => $employee['lastName'] ?? '',
+                    'id'   => $employee['id'] ?? '',
+                    'name' => $full_name ?: ($employee['id'] ?? ''),
                 );
             }
         }
@@ -833,6 +959,79 @@ function clover_reload_tenders()
         }
 
         wp_send_json_success(array('tenders' => $tenders));
+    } catch (Exception $e) {
+        wp_send_json_error(array('error' => $e->getMessage()));
+    }
+}
+
+add_action('wp_ajax_clover_reload_tax_rates', 'clover_reload_tax_rates');
+
+function clover_reload_tax_rates()
+{
+    if (!wp_verify_nonce($_POST['nonce'], 'clover_reload_tax_rates')) {
+        wp_send_json_error(array('error' => 'Security check failed'));
+    }
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('error' => 'Insufficient permissions'));
+    }
+
+    $config       = require CLOVER_PLUGIN_PATH . 'config/api.php';
+    $orderService = new \Src\Services\OrderService($config);
+
+    try {
+        $response  = $orderService->getTaxRates();
+        $tax_rates = array();
+
+        if (isset($response['data']['elements']) && is_array($response['data']['elements'])) {
+            foreach ($response['data']['elements'] as $t) {
+                $rate_raw   = isset($t['rate']) ? intval($t['rate']) : 0;
+                $percent    = round($rate_raw / 100000, 4) + 0;
+                $tax_rates[] = array(
+                    'id'         => $t['id'] ?? '',
+                    'name'       => $t['name'] ?? 'Unnamed',
+                    'percent'    => $percent,
+                    'is_default' => !empty($t['isDefault']),
+                );
+            }
+        }
+
+        wp_send_json_success(array('tax_rates' => $tax_rates));
+    } catch (Exception $e) {
+        wp_send_json_error(array('error' => $e->getMessage()));
+    }
+}
+
+add_action('wp_ajax_clover_reload_discounts', 'clover_reload_discounts');
+
+function clover_reload_discounts()
+{
+    if (!wp_verify_nonce($_POST['nonce'], 'clover_reload_discounts')) {
+        wp_send_json_error(array('error' => 'Security check failed'));
+    }
+
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('error' => 'Insufficient permissions'));
+    }
+
+    $config       = require CLOVER_PLUGIN_PATH . 'config/api.php';
+    $orderService = new \Src\Services\OrderService($config);
+
+    try {
+        $response  = $orderService->getDiscounts();
+        $discounts = array();
+
+        if (isset($response['data']['elements']) && is_array($response['data']['elements'])) {
+            foreach ($response['data']['elements'] as $d) {
+                $discounts[] = array(
+                    'id'         => $d['id'] ?? '',
+                    'name'       => $d['name'] ?? ($d['id'] ?? ''),
+                    'percentage' => isset($d['percentage']) ? intval($d['percentage']) : null,
+                    'amount'     => isset($d['amount']) ? intval($d['amount']) : null,
+                );
+            }
+        }
+
+        wp_send_json_success(array('discounts' => $discounts));
     } catch (Exception $e) {
         wp_send_json_error(array('error' => $e->getMessage()));
     }

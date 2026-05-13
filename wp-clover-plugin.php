@@ -2072,6 +2072,14 @@ function clover_quick_view_product_handler()
                     <!-- Load modifiers from existing system -->
                     <div class="clover-quick-view-modifiers-wrapper" id="quick-view-modifiers-<?php echo esc_attr($product_id); ?>">
                         <?php
+                        // Check availability before modifiers so the inline script can read it
+                        $qv_avail = clover_get_product_availability($product_id);
+                        if (!$qv_avail['available']) {
+                            // Hidden inputs read by updateAddToCartButton() JS
+                            echo '<input type="hidden" id="category-hours-closed" value="1">';
+                            echo '<input type="hidden" id="category-hours-message" value="' . esc_attr($qv_avail['message']) . '">';
+                        }
+
                         // Temporarily override the display to capture modifiers
                         global $product;
                         $original_product = $product;
@@ -2104,7 +2112,7 @@ function clover_quick_view_product_handler()
                 </div>
             </div>
 
-            <?php $qv_avail = clover_get_product_availability($product_id); ?>
+            <?php // $qv_avail already computed above in modifiers wrapper ?>
             <button type="button"
                 class="clover-quick-view-add-to-cart<?php echo !$qv_avail['available'] ? ' disabled' : ''; ?>"
                 data-product-id="<?php echo esc_attr($product_id); ?>"

@@ -734,13 +734,14 @@ function clover_reload_employees()
                         : (($employee['firstName'] ?? '') . ' ' . ($employee['lastName'] ?? ''))
                 );
                 $employees[] = array(
-                    'id'        => $employee['id'] ?? '',
-                    'name'      => $full_name ?: ($employee['id'] ?? ''),
-                    'firstName' => $employee['firstName'] ?? '',
-                    'lastName'  => $employee['lastName'] ?? '',
+                    'id'   => $employee['id'] ?? '',
+                    'name' => $full_name ?: ($employee['id'] ?? ''),
                 );
             }
         }
+
+        // Persist to cache so employee_id_callback reads from DB — no live API call on page load
+        update_option('clover_employees_cache', json_encode($employees));
 
         wp_send_json_success(array('employees' => $employees));
     } catch (Exception $e) {

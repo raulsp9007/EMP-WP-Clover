@@ -870,49 +870,22 @@ class Clover_Admin
      */
     public function employee_id_callback()
     {
-        $value = get_option('clover_employee_id', '');
-
-        // Try to fetch employees from Clover API
-        $employees = array();
-        $config = array(
-            'base_url' => get_option('clover_api_base_url', 'https://api.clover.com/v3/merchants/'),
-            'merchID' => get_option('clover_merchid'),
-            'tokenBearer' => get_option('clover_token'),
-        );
-
-        if (!empty($config['merchID']) && !empty($config['tokenBearer'])) {
-            try {
-                $orderService = new \Src\Services\OrderService($config);
-                $employeesResponse = $orderService->getEmployees();
-
-                if (isset($employeesResponse['data']['elements']) && is_array($employeesResponse['data']['elements'])) {
-                    $employees = $employeesResponse['data']['elements'];
-                }
-            } catch (Exception $e) {
-                clover_log('Error fetching employees: ' . $e->getMessage());
-            }
-        }
+        $value     = get_option('clover_employee_id', '');
+        $employees = json_decode(get_option('clover_employees_cache', '[]'), true) ?: [];
 
         echo '<div style="display: flex; align-items: center; gap: 10px;">';
         echo '<select id="clover_employee_id" name="clover_employee_id" style="min-width: 300px;">';
         echo '<option value="">-- Select Employee --</option>';
 
         foreach ($employees as $employee) {
-            $selected = selected($value, $employee['id'], false);
-            $full_name = trim(
-                ($employee['name'] ?? '') !== ''
-                    ? $employee['name']
-                    : (($employee['firstName'] ?? '') . ' ' . ($employee['lastName'] ?? ''))
-            );
-            if ($full_name === '') {
-                $full_name = $employee['id'];
-            }
+            $selected  = selected($value, $employee['id'], false);
+            $full_name = trim($employee['name'] ?? $employee['id'] ?? '');
+            if ($full_name === '') $full_name = $employee['id'];
             echo '<option value="' . esc_attr($employee['id']) . '"' . $selected . '>' . esc_html($full_name) . '</option>';
         }
 
         echo '</select>';
 
-        // Reload button
         echo '<button type="button" id="reload-employees-btn" class="button" style="margin: 0;" onclick="reloadEmployees()">';
         echo '<span class="dashicons dashicons-update" style="margin-top: 3px;"></span> Reload Employees';
         echo '</button>';
@@ -921,86 +894,53 @@ class Clover_Admin
         echo '<p class="description">Select the default Clover employee to associate with orders created via the API.</p>';
 
         if (empty($employees)) {
-            echo '<p class="description" style="color: #dc3232;">Note: Could not fetch employees. Please verify API credentials.</p>';
-            echo '<input type="text" id="clover_employee_id_manual" value="' . esc_attr($value) . '" class="regular-text" placeholder="Enter employee ID manually" style="margin-top: 10px;" />';
-            echo '<p class="description">If you know the employee ID, enter it above and it will be saved.</p>';
+            echo '<p class="description" style="color: #dc3232;">No employees cached. Click <strong>Reload Employees</strong> to fetch from Clover.</p>';
         }
 
-        // JavaScript for reload & manual input sync
         ?>
         <script type="text/javascript">
         function reloadEmployees() {
-            var btn       = document.getElementById('reload-employees-btn');
-            var select    = document.getElementById('clover_employee_id');
-            var manualInput = document.getElementById('clover_employee_id_manual');
+            var btn    = document.getElementById('reload-employees-btn');
+            var select = document.getElementById('clover_employee_id');
 
-            btn.disabled = true;
-            btn.innerHTML = '<span class="spinner is-active" style="float:none; display:inline-block; margin:0 5px 0 0;"></span> Loading...';
+            btn.disabled  = true;
+            btn.innerHTML = '<span class="spinner is-active" style="float:none;display:inline-block;margin:0 5px 0 0;"></span> Loading...';
 
-            var ajaxUrl = '<?php echo admin_url('admin-ajax.php'); ?>';
-            var nonce   = '<?php echo wp_create_nonce('clover_make_request'); ?>';
-
-            jQuery.post(ajaxUrl, {
+            jQuery.post('<?php echo admin_url('admin-ajax.php'); ?>', {
                 action: 'clover_reload_employees',
-                nonce: nonce
+                nonce:  '<?php echo wp_create_nonce('clover_make_request'); ?>'
             }, function(response) {
                 if (response.success && response.data.employees && response.data.employees.length > 0) {
+                    var currentVal = select.value;
                     select.innerHTML = '<option value="">-- Select Employee --</option>';
 
                     response.data.employees.forEach(function(emp) {
-                        var option  = document.createElement('option');
-                        option.value = emp.id;
-                        option.textContent = emp.name || (emp.firstName + ' ' + emp.lastName).trim() || emp.id;
-                        option.selected = (emp.id === '<?php echo esc_js($value); ?>');
+                        var option       = document.createElement('option');
+                        option.value     = emp.id;
+                        option.textContent = emp.name || emp.id;
+                        option.selected  = (emp.id === currentVal);
                         select.appendChild(option);
                     });
 
-                    if (manualInput) {
-                        manualInput.parentElement && (manualInput.parentElement.style.display = 'none');
-                    }
-
-                    btn.innerHTML = '<span class="dashicons dashicons-yes" style="margin-top: 3px;"></span> Reloaded!';
+                    btn.innerHTML = '<span class="dashicons dashicons-yes" style="margin-top:3px;"></span> Reloaded!';
                     setTimeout(function() {
-                        btn.disabled = false;
-                        btn.innerHTML = '<span class="dashicons dashicons-update" style="margin-top: 3px;"></span> Reload Employees';
+                        btn.disabled  = false;
+                        btn.innerHTML = '<span class="dashicons dashicons-update" style="margin-top:3px;"></span> Reload Employees';
                     }, 2000);
                 } else {
-                    btn.innerHTML = '<span class="dashicons dashicons-no" style="margin-top: 3px;"></span> Failed';
+                    btn.innerHTML = '<span class="dashicons dashicons-no" style="margin-top:3px;"></span> Failed';
                     setTimeout(function() {
-                        btn.disabled = false;
-                        btn.innerHTML = '<span class="dashicons dashicons-update" style="margin-top: 3px;"></span> Reload Employees';
+                        btn.disabled  = false;
+                        btn.innerHTML = '<span class="dashicons dashicons-update" style="margin-top:3px;"></span> Reload Employees';
                     }, 2000);
                     alert('Error: ' + (response.data && response.data.error ? response.data.error : 'Failed to load employees'));
                 }
             }).fail(function() {
-                btn.innerHTML = '<span class="dashicons dashicons-no" style="margin-top: 3px;"></span> Failed';
-                setTimeout(function() {
-                    btn.disabled = false;
-                    btn.innerHTML = '<span class="dashicons dashicons-update" style="margin-top: 3px;"></span> Reload Employees';
-                }, 2000);
+                btn.disabled  = false;
+                btn.innerHTML = '<span class="dashicons dashicons-update" style="margin-top:3px;"></span> Reload Employees';
                 alert('Error: Failed to connect to server');
             });
         }
-
-        // Sync manual input value into the hidden select so it gets saved
-        (function() {
-            var manualInput = document.getElementById('clover_employee_id_manual');
-            var select      = document.getElementById('clover_employee_id');
-            if (manualInput && select) {
-                manualInput.addEventListener('input', function() {
-                    // Upsert a hidden option to carry the manual value
-                    var existing = select.querySelector('option[data-manual]');
-                    if (!existing) {
-                        existing = document.createElement('option');
-                        existing.setAttribute('data-manual', '1');
-                        select.appendChild(existing);
-                    }
-                    existing.value = manualInput.value;
-                    existing.textContent = manualInput.value;
-                    existing.selected = true;
-                });
-            }
-        })();
         </script>
         <?php
     }

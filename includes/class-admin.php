@@ -329,8 +329,8 @@ class Clover_Admin
             'clover_prevent_orders_when_closed',
             'Prevent Orders When Closed',
             array($this, 'prevent_orders_when_closed_callback'),
-            'clover-settings-pricing',
-            'clover_pricing_section'
+            'clover-settings-hours',
+            'clover_hours_section'
         );
 
         // ========== TAB 4: Store Hours ==========
@@ -433,32 +433,32 @@ class Clover_Admin
             'clover_bh_show_banner',
             'Show Status Banner',
             array($this, 'bh_show_banner_callback'),
-            'clover-settings-banner',
-            'clover_bh_section'
+            'clover-settings-hours',
+            'clover_hours_section'
         );
 
         add_settings_field(
             'clover_bh_banner_position',
             'Banner Position',
             array($this, 'bh_banner_position_callback'),
-            'clover-settings-banner',
-            'clover_bh_section'
+            'clover-settings-hours',
+            'clover_hours_section'
         );
 
         add_settings_field(
             'clover_bh_show_countdown',
             'Show Countdown',
             array($this, 'bh_show_countdown_callback'),
-            'clover-settings-banner',
-            'clover_bh_section'
+            'clover-settings-hours',
+            'clover_hours_section'
         );
 
         add_settings_field(
             'clover_bh_test_connection',
             'Test Business Hours',
             array($this, 'bh_test_connection_callback'),
-            'clover-settings-banner',
-            'clover_bh_section'
+            'clover-settings-hours',
+            'clover_hours_section'
         );
 
         // ========== TAB 7: Logs ==========
@@ -1828,7 +1828,6 @@ class Clover_Admin
                 <a href="?page=clover-api-config&tab=taxes" class="nav-tab <?php echo $active_tab === 'taxes' ? 'nav-tab-active' : ''; ?>">Taxes and Fees</a>
                 <a href="?page=clover-api-config&tab=hours" class="nav-tab <?php echo $active_tab === 'hours' ? 'nav-tab-active' : ''; ?>">Store Hours</a>
                 <a href="?page=clover-api-config&tab=quickview" class="nav-tab <?php echo $active_tab === 'quickview' ? 'nav-tab-active' : ''; ?>">Quick View</a>
-                <a href="?page=clover-api-config&tab=banner" class="nav-tab <?php echo $active_tab === 'banner' ? 'nav-tab-active' : ''; ?>">Business Hours Banner</a>
                 <a href="?page=clover-api-config&tab=logs" class="nav-tab <?php echo $active_tab === 'logs' ? 'nav-tab-active' : ''; ?>">Logs</a>
             </h2>
 
@@ -1840,9 +1839,9 @@ class Clover_Admin
                 $tab_options = array(
                     'api' => array('clover_merchid', 'clover_token', 'clover_api_base_url'),
                     'orders' => array('clover_auto_print_orders', 'clover_auto_mark_as_paid', 'clover_payment_tender_id', 'clover_employee_id', 'clover_default_order_type_id'),
-                    'pricing' => array('clover_import_fee_enabled', 'clover_import_fee_percent', 'clover_global_discount_enabled', 'clover_global_discount_percent', 'clover_global_discount_apply_modifiers', 'clover_prevent_orders_when_closed'),
+                    'pricing' => array('clover_import_fee_enabled', 'clover_import_fee_percent', 'clover_global_discount_enabled', 'clover_global_discount_percent', 'clover_global_discount_apply_modifiers'),
+                    'hours'   => array('clover_prevent_orders_when_closed', 'clover_bh_show_banner', 'clover_bh_banner_position', 'clover_bh_show_countdown'),
                     'quickview' => array('clover_quick_view_show_button', 'clover_quick_view_show_on_shop', 'clover_quick_view_show_on_category', 'clover_quick_view_show_on_tag', 'clover_quick_view_show_on_pages', 'clover_quick_view_show_on_posts', 'clover_quick_view_button_text', 'clover_quick_view_button_position'),
-                    'banner' => array('clover_bh_show_banner', 'clover_bh_banner_position', 'clover_bh_show_countdown'),
                     'logs'      => array('clover_enable_logs', 'clover_log_to_wp_debug'),
                     'discounts' => array('clover_discount_apply_to_orders', 'clover_discount_id', 'clover_discount_cached_percent'),
                     'taxes'     => array('clover_enabled_tax_rates', 'clover_tax_rates_cache'),
@@ -1886,8 +1885,6 @@ class Clover_Admin
                     do_settings_sections('clover-settings-hours');
                 } elseif ($active_tab === 'quickview') {
                     do_settings_sections('clover-settings-quickview');
-                } elseif ($active_tab === 'banner') {
-                    do_settings_sections('clover-settings-banner');
                 } elseif ($active_tab === 'discounts') {
                     do_settings_sections('clover-settings-discounts');
                 } elseif ($active_tab === 'taxes') {

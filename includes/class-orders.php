@@ -127,7 +127,10 @@ class WPOrders_Integration
                 $line_item['modifications'] = $modifications;
             }
 
-            $lineItems[] = $line_item;
+            $qty = max(1, intval($item->get_quantity()));
+            for ($i = 0; $i < $qty; $i++) {
+                $lineItems[] = $line_item;
+            }
         }
 
         // Delivery fee — add as ad-hoc line item (no taxRates, no item.id)

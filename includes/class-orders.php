@@ -157,14 +157,21 @@ class WPOrders_Integration
 
         if ($user_id > 0) {
             $user = get_user_by('id', $user_id);
-            if ($user) $customer_name = trim($user->first_name . ' ' . $user->last_name);
+            if ($user) {
+                $customer_name = trim($user->first_name . ' ' . $user->last_name);
+            }
+            // WP profile name empty — fall back to billing fields
+            if (empty($customer_name)) {
+                $customer_name = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
+            }
         } else {
+            // Guest: use billing fields from checkout
             $customer_name = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
         }
 
         $note = trim(
-            (!empty($customer_name) ? $customer_name . '. ' : '') .
-            (!empty($customer_note) ? 'Special instructions: ' . $customer_note : '')
+            (!empty($customer_name) ? 'Customer: ' . $customer_name . '. ' : '') .
+            (!empty($customer_note) ? 'Note: ' . $customer_note : '')
         );
 
         // Order type

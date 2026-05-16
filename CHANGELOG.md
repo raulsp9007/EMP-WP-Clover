@@ -7,6 +7,16 @@ All notable changes documented here. Each version = restore point (`git tag vX.X
 ## [Unreleased]
 - Base price display in checkout Order Summary (in progress)
 
+### Fixed
+- Quantity not sent correctly to Clover — atomic order now repeats line item N times for qty > 1 instead of always sending 1
+- Customer name missing from Clover order note — logged-in users with empty WP profile now fall back to billing fields from checkout; guests always read from `billing_first_name` / `billing_last_name`
+
+### Changed
+- Order note format: `"Special instructions: X"` → `"Note: X"` and added `"Customer: <name>."` prefix before note text
+- Admin: moved "Prevent Orders When Closed" from Pricing tab to Store Hours tab
+- Admin: moved all Business Hours Banner settings (Show Status Banner, Banner Position, Show Countdown, Test Business Hours) from Business Hours Banner tab to Store Hours tab
+- Admin: removed Business Hours Banner tab from navigation (consolidated into Store Hours)
+
 ---
 
 ## [1.3.0] - 2026-05-12

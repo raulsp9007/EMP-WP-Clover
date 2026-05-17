@@ -96,15 +96,24 @@ class OrderService extends BaseService
         return $this->post("/orders/{$orderId}/line_items/{$lineItemId}/modifications", $payload);
     }
 
-    // Nuevo método para enviar orden a impresora Clover
-    public function printOrder(string $orderId): array
+    // Get all devices registered in the merchant account
+    public function getDevices(): array
+    {
+        return $this->get('/devices');
+    }
+
+    // Enviar orden a impresora Clover — deviceId requerido por Clover para saber a qué dispositivo imprimir
+    public function printOrder(string $orderId, string $deviceId = ''): array
     {
         $payload = [
-            'orderRef' => [
-                'id' => $orderId
-            ]
+            'orderRef' => ['id' => $orderId],
         ];
-        clover_log('PRINT ORDER: Sending order ' . $orderId . ' to printer');
+
+        if (!empty($deviceId)) {
+            $payload['deviceRef'] = ['id' => $deviceId];
+        }
+
+        clover_log('PRINT ORDER: Sending order ' . $orderId . ' to device ' . ($deviceId ?: 'none (no deviceRef)'));
         return $this->post('/print_event', $payload);
     }
 

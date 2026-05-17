@@ -7,11 +7,18 @@ All notable changes documented here. Each version = restore point (`git tag vX.X
 ## [Unreleased]
 - Base price display in checkout Order Summary (in progress)
 
+### Added
+- Print Device selector in Orders tab — dropdown loads all Clover devices via `GET /devices` with Reload button
+- `getDevices()` method in `OrderService.php`
+- `clover_reload_devices` AJAX handler in `wp-clover-plugin.php`
+
 ### Fixed
+- Auto-Print not working — `printOrder()` now sends `deviceRef.id` to Clover; without it Clover ignores the `/print_event` call
 - Quantity not sent correctly to Clover — atomic order now repeats line item N times for qty > 1 instead of always sending 1
 - Customer name missing from Clover order note — logged-in users with empty WP profile now fall back to billing fields from checkout; guests always read from `billing_first_name` / `billing_last_name`
 
 ### Changed
+- `printOrder(string $orderId, string $deviceId = '')` — new optional param; if device configured, sends `deviceRef` in payload
 - Order note format: `"Special instructions: X"` → `"Note: X"` and added `"Customer: <name>."` prefix before note text
 - Admin: moved "Prevent Orders When Closed" from Pricing tab to Store Hours tab
 - Admin: moved all Business Hours Banner settings (Show Status Banner, Banner Position, Show Countdown, Test Business Hours) from Business Hours Banner tab to Store Hours tab

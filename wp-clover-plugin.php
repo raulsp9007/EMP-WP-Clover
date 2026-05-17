@@ -879,6 +879,49 @@ function clover_clear_logs()
 add_action('wp_ajax_clover_reload_employees', 'clover_reload_employees');
 
 /**
+ * AJAX handler to reload Clover devices (for printer selection)
+ */
+function clover_reload_devices()
+{
+    if (!wp_verify_nonce($_POST['nonce'], 'clover_make_request')) {
+        wp_send_json_error(array('error' => 'Security check failed'));
+    }
+
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('error' => 'Insufficient permissions'));
+    }
+
+    $config       = require CLOVER_PLUGIN_PATH . 'config/api.php';
+    $orderService = new \Src\Services\OrderService($config);
+
+    try {
+        $response = $orderService->getDevices();
+        $devices  = array();
+
+        if (isset($response['data']['elements']) && is_array($response['data']['elements'])) {
+            foreach ($response['data']['elements'] as $device) {
+                $label     = $device['name'] ?? ($device['serial'] ?? ($device['id'] ?? ''));
+                $serial    = $device['serial'] ?? '';
+                if (!empty($serial)) {
+                    $label .= ' (' . $serial . ')';
+                }
+                $devices[] = array(
+                    'id'    => $device['id']    ?? '',
+                    'label' => $label,
+                    'serial'=> $serial,
+                );
+            }
+        }
+
+        wp_send_json_success(array('devices' => $devices));
+    } catch (Exception $e) {
+        wp_send_json_error(array('error' => $e->getMessage()));
+    }
+}
+
+add_action('wp_ajax_clover_reload_devices', 'clover_reload_devices');
+
+/**
  * AJAX handler to reload Clover order types
  */
 function clover_reload_order_types()

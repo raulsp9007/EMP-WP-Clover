@@ -150,6 +150,7 @@ class Clover_Admin
         register_setting('clover_settings', 'clover_global_discount_apply_modifiers', array($this, 'sanitize_checkbox'));
         register_setting('clover_settings', 'clover_prevent_orders_when_closed', array($this, 'sanitize_checkbox'));
         register_setting('clover_settings', 'clover_employee_id', array($this, 'sanitize_text'));
+        register_setting('clover_settings', 'clover_device_id', array($this, 'sanitize_text'));
         register_setting('clover_settings', 'clover_default_order_type_id', array($this, 'sanitize_text'));
         register_setting('clover_settings', 'clover_order_type_map', array($this, 'sanitize_order_type_map'));
 
@@ -225,6 +226,14 @@ class Clover_Admin
             'clover_auto_print_orders',
             'Auto-Print Orders',
             array($this, 'auto_print_callback'),
+            'clover-settings-orders',
+            'clover_orders_section'
+        );
+
+        add_settings_field(
+            'clover_device_id',
+            'Print Device',
+            array($this, 'device_id_callback'),
             'clover-settings-orders',
             'clover_orders_section'
         );
@@ -651,6 +660,120 @@ class Clover_Admin
         }
         echo '<input type="text" id="clover_api_base_url" name="clover_api_base_url" value="' . esc_attr($value) . '" size="50" />';
         echo '<p class="description">Enter the base URL for the Clover API. Default: https://api.clover.com/v3/merchants/</p>';
+    }
+
+    /**
+     * Print Device selector callback — fetches devices from Clover API
+     */
+    public function device_id_callback()
+    {
+        $value = get_option('clover_device_id', '');
+
+        $devices = array();
+        $config  = array(
+            'base_url'    => get_option('clover_api_base_url', 'https://api.clover.com/v3/merchants/'),
+            'merchID'     => get_option('clover_merchid'),
+            'tokenBearer' => get_option('clover_token'),
+        );
+
+        if (!empty($config['merchID']) && !empty($config['tokenBearer'])) {
+            try {
+                $orderService    = new \Src\Services\OrderService($config);
+                $devicesResponse = $orderService->getDevices();
+
+                if (isset($devicesResponse['data']['elements']) && is_array($devicesResponse['data']['elements'])) {
+                    $devices = $devicesResponse['data']['elements'];
+                }
+            } catch (Exception $e) {
+                clover_log('Error fetching devices: ' . $e->getMessage());
+            }
+        }
+
+        echo '<div style="display: flex; align-items: center; gap: 10px;">';
+        echo '<select id="clover_device_id" name="clover_device_id" style="min-width: 300px;">';
+        echo '<option value="">-- Select Device --</option>';
+
+        foreach ($devices as $device) {
+            $selected = selected($value, $device['id'], false);
+            $label    = $device['name'] ?? ($device['serial'] ?? $device['id']);
+            if (!empty($device['serial'])) {
+                $label .= ' (' . $device['serial'] . ')';
+            }
+            echo '<option value="' . esc_attr($device['id']) . '"' . $selected . '>' . esc_html($label) . '</option>';
+        }
+
+        echo '</select>';
+
+        echo '<button type="button" id="reload-devices-btn" class="button" style="margin: 0;" onclick="reloadDevices()">';
+        echo '<span class="dashicons dashicons-update" style="margin-top: 3px;"></span> Reload Devices';
+        echo '</button>';
+        echo '</div>';
+
+        echo '<p class="description">Select the Clover device (station/mini) to receive print jobs. Required for Auto-Print to work.</p>';
+
+        if (empty($devices)) {
+            echo '<p class="description" style="color: #dc3232;">Note: Could not fetch devices. Verify API credentials. You can enter a device ID manually.</p>';
+            echo '<input type="text" id="clover_device_id_manual" value="' . esc_attr($value) . '" class="regular-text" placeholder="Enter device ID manually" style="margin-top: 10px;" />';
+            echo '<p class="description">Enter the device ID from your Clover dashboard and save.</p>';
+        }
+
+        ?>
+        <script type="text/javascript">
+        function reloadDevices() {
+            var btn         = document.getElementById('reload-devices-btn');
+            var select      = document.getElementById('clover_device_id');
+            var manualInput = document.getElementById('clover_device_id_manual');
+
+            btn.disabled  = true;
+            btn.innerHTML = '<span class="spinner is-active" style="float:none; display:inline-block; margin:0 5px 0 0;"></span> Loading...';
+
+            var ajaxUrl = '<?php echo admin_url('admin-ajax.php'); ?>';
+            var nonce   = '<?php echo wp_create_nonce('clover_make_request'); ?>';
+
+            jQuery.post(ajaxUrl, {
+                action: 'clover_reload_devices',
+                nonce:  nonce
+            }, function(response) {
+                if (response.success && response.data.devices && response.data.devices.length > 0) {
+                    var currentVal = select.value;
+                    select.innerHTML = '<option value="">-- Select Device --</option>';
+
+                    response.data.devices.forEach(function(device) {
+                        var option = document.createElement('option');
+                        option.value = device.id;
+                        option.textContent = device.label || device.id;
+                        option.selected = (device.id === currentVal);
+                        select.appendChild(option);
+                    });
+
+                    if (manualInput) {
+                        manualInput.parentElement && (manualInput.parentElement.style.display = 'none');
+                    }
+
+                    btn.innerHTML = '<span class="dashicons dashicons-yes" style="margin-top: 3px;"></span> Reloaded!';
+                    setTimeout(function() {
+                        btn.disabled  = false;
+                        btn.innerHTML = '<span class="dashicons dashicons-update" style="margin-top: 3px;"></span> Reload Devices';
+                    }, 2000);
+                } else {
+                    btn.innerHTML = '<span class="dashicons dashicons-no" style="margin-top: 3px;"></span> Failed';
+                    setTimeout(function() {
+                        btn.disabled  = false;
+                        btn.innerHTML = '<span class="dashicons dashicons-update" style="margin-top: 3px;"></span> Reload Devices';
+                    }, 2000);
+                    alert('Error: ' + (response.data && response.data.error ? response.data.error : 'Failed to load devices'));
+                }
+            }).fail(function() {
+                btn.innerHTML = '<span class="dashicons dashicons-no" style="margin-top: 3px;"></span> Failed';
+                setTimeout(function() {
+                    btn.disabled  = false;
+                    btn.innerHTML = '<span class="dashicons dashicons-update" style="margin-top: 3px;"></span> Reload Devices';
+                }, 2000);
+                alert('Error: Failed to connect to server');
+            });
+        }
+        </script>
+        <?php
     }
 
     /**
@@ -1839,7 +1962,7 @@ class Clover_Admin
                 // Hidden fields to preserve settings from other tabs when saving one tab
                 $tab_options = array(
                     'api' => array('clover_merchid', 'clover_token', 'clover_api_base_url'),
-                    'orders' => array('clover_auto_print_orders', 'clover_auto_mark_as_paid', 'clover_payment_tender_id', 'clover_employee_id', 'clover_default_order_type_id'),
+                    'orders' => array('clover_auto_print_orders', 'clover_device_id', 'clover_auto_mark_as_paid', 'clover_payment_tender_id', 'clover_employee_id', 'clover_default_order_type_id'),
                     'pricing' => array('clover_import_fee_enabled', 'clover_import_fee_percent', 'clover_global_discount_enabled', 'clover_global_discount_percent', 'clover_global_discount_apply_modifiers', 'clover_prevent_orders_when_closed'),
                     'quickview' => array('clover_quick_view_show_button', 'clover_quick_view_show_on_shop', 'clover_quick_view_show_on_category', 'clover_quick_view_show_on_tag', 'clover_quick_view_show_on_pages', 'clover_quick_view_show_on_posts', 'clover_quick_view_button_text', 'clover_quick_view_button_position'),
                     'banner' => array('clover_bh_show_banner', 'clover_bh_banner_position', 'clover_bh_show_countdown'),

@@ -386,46 +386,118 @@ function clover_enqueue_frontend_scripts()
     ));
 }
 
-// Validate cart when store/category is closed (softer approach - keeps UI visible)
+// Validate cart when store/category is closed
 add_filter('woocommerce_add_to_cart_validation', 'clover_validate_cart_when_closed', 10, 3);
 function clover_validate_cart_when_closed($passed, $product_id, $quantity)
 {
     $prevent_orders = get_option('clover_prevent_orders_when_closed', '0');
-    
     if ($prevent_orders !== '1') {
         return $passed;
     }
-    
-    // 1. Check Store Hours
+
+    // Hierarchy: category hours (specific) override store hours (general).
+    // Only fall back to store hours if NO category has custom hours configured.
+    $categories = get_the_terms($product_id, 'product_cat');
+
+    if ($categories && !is_wp_error($categories)) {
+        $has_custom_hours = false;
+        $any_cat_open     = false;
+
+        foreach ($categories as $cat) {
+            $enabled = get_term_meta($cat->term_id, 'category_hours_enabled', true);
+            if ($enabled === 'yes') {
+                $has_custom_hours = true;
+                if (!clover_is_category_closed($cat->term_id)) {
+                    $any_cat_open = true;
+                    break;
+                }
+            }
+        }
+
+        // At least one category has custom hours — use category result, skip store check
+        if ($has_custom_hours) {
+            if (!$any_cat_open) {
+                wc_add_notice('This item is currently unavailable. Please check back during business hours.', 'error');
+                return false;
+            }
+            return $passed;
+        }
+    }
+
+    // No category with custom hours — fall back to store-level hours
     $business_hours = new \Src\BusinessHours\Business_Hours();
-    $status = $business_hours->get_business_status();
-    
+    $status         = $business_hours->get_business_status();
+
+    // API error → fail open (don't block orders due to Clover API failures)
+    if (!empty($status['error'])) {
+        return $passed;
+    }
+
     if (!$status['open']) {
         wc_add_notice('Our store is currently closed. Please check back during business hours.', 'error');
         return false;
     }
-    
-    // 2. Check Category Hours
-    $categories = get_the_terms($product_id, 'product_cat');
-    if ($categories && !is_wp_error($categories)) {
-        $all_categories_closed = true;
-        
-        foreach ($categories as $category) {
-            // If any category is open, the product is available
-            if (!clover_is_category_closed($category->term_id)) {
-                $all_categories_closed = false;
-                break;
+
+    return $passed;
+}
+
+// Validate at checkout — catches items added to cart before store closed
+add_action('woocommerce_checkout_process', 'clover_validate_checkout_when_closed');
+function clover_validate_checkout_when_closed()
+{
+    $prevent_orders = get_option('clover_prevent_orders_when_closed', '0');
+    if ($prevent_orders !== '1') {
+        return;
+    }
+
+    $store_checked = false; // Check store hours once, not per item
+    $store_open    = true;
+
+    foreach (WC()->cart->get_cart() as $cart_item) {
+        $product_id = $cart_item['product_id'];
+        $categories = get_the_terms($product_id, 'product_cat');
+
+        $has_custom_hours = false;
+        $any_cat_open     = false;
+
+        if ($categories && !is_wp_error($categories)) {
+            foreach ($categories as $cat) {
+                $enabled = get_term_meta($cat->term_id, 'category_hours_enabled', true);
+                if ($enabled === 'yes') {
+                    $has_custom_hours = true;
+                    if (!clover_is_category_closed($cat->term_id)) {
+                        $any_cat_open = true;
+                        break;
+                    }
+                }
             }
         }
-        
-        // If all categories are closed, block the product
-        if ($all_categories_closed) {
-            wc_add_notice('This item is currently unavailable. Please check back during business hours.', 'error');
-            return false;
+
+        if ($has_custom_hours) {
+            if (!$any_cat_open) {
+                $name = $cart_item['data']->get_name();
+                wc_add_notice(
+                    sprintf('"%s" is currently unavailable. Please remove it from your cart before placing the order.', $name),
+                    'error'
+                );
+            }
+            continue; // Category hours handled — skip store check for this item
+        }
+
+        // No category hours — check store hours (once)
+        if (!$store_checked) {
+            $business_hours = new \Src\BusinessHours\Business_Hours();
+            $status         = $business_hours->get_business_status();
+            $store_checked  = true;
+            // API error → fail open
+            $store_open = !empty($status['error']) ? true : $status['open'];
+        }
+
+        if (!$store_open) {
+            wc_add_notice('Our store is currently closed. Orders cannot be placed at this time.', 'error');
+            return; // One notice is enough
         }
     }
-    
-    return $passed;
 }
 
 // Helper function to check if a category is currently closed based on custom hours

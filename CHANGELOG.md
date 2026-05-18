@@ -11,9 +11,13 @@ All notable changes documented here. Each version = restore point (`git tag vX.X
 - Print Device selector in Orders tab — dropdown loads all Clover devices via `GET /devices` with Reload button
 - `getDevices()` method in `OrderService.php`
 - `clover_reload_devices` AJAX handler in `wp-clover-plugin.php`
+- Checkout validation for Prevent Orders When Closed — blocks order submission if store/category is closed (previously only blocked Add to Cart)
 
 ### Fixed
 - Auto-Print not working — `printOrder()` now sends `deviceRef.id` to Clover; without it Clover ignores the `/print_event` call
+- Prevent Orders When Closed hierarchy inverted — store hours were checked before category hours; now category-specific hours take precedence, store hours used only as fallback when no category has custom hours configured
+- Prevent Orders When Closed blocks all orders when Clover API fails — changed to fail open so API downtime does not block customer orders
+- Business hours parser only read first time slot per day — now reads all slots (supports split hours e.g. lunch + dinner)
 - Quantity not sent correctly to Clover — atomic order now repeats line item N times for qty > 1 instead of always sending 1
 - Customer name missing from Clover order note — logged-in users with empty WP profile now fall back to billing fields from checkout; guests always read from `billing_first_name` / `billing_last_name`
 

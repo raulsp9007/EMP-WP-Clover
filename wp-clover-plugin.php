@@ -2,9 +2,10 @@
 
 /**
  * Plugin Name: WPCloverSync
- * Description: A plugin to sync WP and Clover via API
+ * Description: Integrates WooCommerce with Clover POS — syncs products, modifiers, taxes, employees, order types, and business hours. Orders placed in WooCommerce are automatically sent to Clover POS.
  * Version: 1.0.1
  * Author: Ermis Media Production
+ * Author URI: https://ermismedia.com
  */
 
 // Prevent direct access

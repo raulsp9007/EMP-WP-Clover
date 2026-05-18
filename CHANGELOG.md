@@ -11,11 +11,12 @@ All notable changes documented here. Each version = restore point (`git tag vX.X
 - Print Device selector in Orders tab — dropdown loads all Clover devices via `GET /devices` with Reload button
 - `getDevices()` method in `OrderService.php`
 - `clover_reload_devices` AJAX handler in `wp-clover-plugin.php`
-- Checkout validation for Prevent Orders When Closed — blocks order submission if store/category is closed (previously only blocked Add to Cart)
+- `clover_checkout_closed_notice` — shows store-closed error notice above Place Order button (`woocommerce_review_order_before_submit`); displays next opening time from Business Hours API
+- `clover_block_order_when_closed` — hard blocks order submission at `woocommerce_checkout_process` when store is closed; fails open on API errors
 
 ### Fixed
 - Auto-Print not working — `printOrder()` now sends `deviceRef.id` to Clover; without it Clover ignores the `/print_event` call
-- Prevent Orders When Closed hierarchy corrected — store hours checked first as hard gate; if store is closed all items are blocked; if store is open, category-specific hours are then evaluated per item
+- Prevent Orders When Closed not blocking orders — replaced unreliable add-to-cart validation with checkout-level enforcement; notice + hard block both fire at Place Order
 - Prevent Orders When Closed blocks all orders when Clover API fails — changed to fail open so API downtime does not block customer orders
 - Business hours parser only read first time slot per day — now reads all slots (supports split hours e.g. lunch + dinner)
 - Quantity not sent correctly to Clover — atomic order now repeats line item N times for qty > 1 instead of always sending 1
@@ -27,6 +28,10 @@ All notable changes documented here. Each version = restore point (`git tag vX.X
 - Admin: moved "Prevent Orders When Closed" from Pricing tab to Store Hours tab
 - Admin: moved all Business Hours Banner settings (Show Status Banner, Banner Position, Show Countdown, Test Business Hours) from Business Hours Banner tab to Store Hours tab
 - Admin: removed Business Hours Banner tab from navigation (consolidated into Store Hours)
+
+### Removed
+- `clover_validate_cart_when_closed` — removed add-to-cart blocking for store-level hours (was unreliable due to Clover API dependency; category-level add-to-cart state via `clover_is_category_closed` retained)
+- `clover_validate_checkout_when_closed` — superseded by `clover_block_order_when_closed`
 
 ---
 

@@ -386,101 +386,48 @@ function clover_enqueue_frontend_scripts()
     ));
 }
 
-// Validate cart when store/category is closed
-add_filter('woocommerce_add_to_cart_validation', 'clover_validate_cart_when_closed', 10, 3);
-function clover_validate_cart_when_closed($passed, $product_id, $quantity)
+// Show closed-store notice above the Place Order button in checkout
+add_action('woocommerce_review_order_before_submit', 'clover_checkout_closed_notice');
+function clover_checkout_closed_notice()
 {
-    $prevent_orders = get_option('clover_prevent_orders_when_closed', '0');
-    if ($prevent_orders !== '1') {
-        return $passed;
+    if (get_option('clover_prevent_orders_when_closed', '0') !== '1') {
+        return;
     }
 
-    // STEP 1: Store hours — hard gate checked first.
-    // If store is definitively closed, block everything regardless of category hours.
-    // If API is unavailable (error flag), fail open and proceed to category check.
     $business_hours = new \Src\BusinessHours\Business_Hours();
     $status         = $business_hours->get_business_status();
 
-    if (empty($status['error']) && !$status['open']) {
-        wc_add_notice('Our store is currently closed. Please check back during business hours.', 'error');
-        return false;
+    // API error or store open — show nothing
+    if (!empty($status['error']) || $status['open']) {
+        return;
     }
 
-    // STEP 2: Store is open (or API unavailable) — check category-specific hours.
-    $categories = get_the_terms($product_id, 'product_cat');
-    if ($categories && !is_wp_error($categories)) {
-        $has_custom_hours = false;
-        $any_cat_open     = false;
+    $when    = !empty($status['message']) ? $status['message'] : 'We are currently closed';
+    $message = esc_html($when) . '. Orders cannot be placed while the store is closed.';
 
-        foreach ($categories as $cat) {
-            $enabled = get_term_meta($cat->term_id, 'category_hours_enabled', true);
-            if ($enabled === 'yes') {
-                $has_custom_hours = true;
-                if (!clover_is_category_closed($cat->term_id)) {
-                    $any_cat_open = true;
-                    break;
-                }
-            }
-        }
-
-        if ($has_custom_hours && !$any_cat_open) {
-            wc_add_notice('This item is currently unavailable. Please check back during business hours.', 'error');
-            return false;
-        }
-    }
-
-    return $passed;
+    echo '<div class="woocommerce-error clover-store-closed-notice" style="margin-bottom:16px;">'
+        . $message
+        . '</div>';
 }
 
-// Validate at checkout — catches items added to cart before store closed
-add_action('woocommerce_checkout_process', 'clover_validate_checkout_when_closed');
-function clover_validate_checkout_when_closed()
+// Hard block at order submission when store is closed
+add_action('woocommerce_checkout_process', 'clover_block_order_when_closed');
+function clover_block_order_when_closed()
 {
-    $prevent_orders = get_option('clover_prevent_orders_when_closed', '0');
-    if ($prevent_orders !== '1') {
+    if (get_option('clover_prevent_orders_when_closed', '0') !== '1') {
         return;
     }
 
-    // Check store hours once for the whole cart
     $business_hours = new \Src\BusinessHours\Business_Hours();
     $status         = $business_hours->get_business_status();
-    $store_api_ok   = empty($status['error']);
-    $store_open     = !$store_api_ok || $status['open']; // fail open on API error
 
-    if ($store_api_ok && !$status['open']) {
-        wc_add_notice('Our store is currently closed. Orders cannot be placed at this time.', 'error');
+    // API error → fail open (don't block due to API downtime)
+    if (!empty($status['error']) || $status['open']) {
         return;
     }
 
-    // Store open (or API unavailable) — check category hours per item
-    foreach (WC()->cart->get_cart() as $cart_item) {
-        $product_id = $cart_item['product_id'];
-        $categories = get_the_terms($product_id, 'product_cat');
-
-        $has_custom_hours = false;
-        $any_cat_open     = false;
-
-        if ($categories && !is_wp_error($categories)) {
-            foreach ($categories as $cat) {
-                $enabled = get_term_meta($cat->term_id, 'category_hours_enabled', true);
-                if ($enabled === 'yes') {
-                    $has_custom_hours = true;
-                    if (!clover_is_category_closed($cat->term_id)) {
-                        $any_cat_open = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if ($has_custom_hours && !$any_cat_open) {
-            $name = $cart_item['data']->get_name();
-            wc_add_notice(
-                sprintf('"%s" is currently unavailable. Please remove it from your cart before placing the order.', $name),
-                'error'
-            );
-        }
-    }
+    $when = !empty($status['message']) ? $status['message'] : 'We are currently closed';
+    wc_add_notice($when . '. Please place your order during business hours.', 'error');
 }
 
 // Helper function to check if a category is currently closed based on custom hours

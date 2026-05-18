@@ -13,6 +13,9 @@ All notable changes documented here. Each version = restore point (`git tag vX.X
 - `clover_reload_devices` AJAX handler in `wp-clover-plugin.php`
 - `clover_checkout_closed_notice` — shows store-closed error notice above Place Order button (`woocommerce_review_order_before_submit`); displays next opening time from Business Hours API
 - `clover_block_order_when_closed` — hard blocks order submission at `woocommerce_checkout_process` when store is closed; fails open on API errors
+- `clover_block_order_when_closed_blocks` — hard blocks WooCommerce Blocks (Store API) checkout via `woocommerce_store_api_checkout_order_processed`; throws `RouteException` (degrades to `\Exception` on older WC)
+- `clover_enqueue_checkout_closed_script` — enqueues `checkout-closed.js` on checkout pages; localizes `cloverStoreStatus` with open/message/error from Business Hours API
+- `public/js/checkout-closed.js` — disables Place Order button + injects closed notice for both Classic and Blocks checkout; uses `MutationObserver` to survive React re-renders
 
 ### Fixed
 - Auto-Print not working — `printOrder()` now sends `deviceRef.id` to Clover; without it Clover ignores the `/print_event` call

@@ -351,6 +351,67 @@ function clover_settings_audit_log($option_name, $old_value, $new_value)
     @file_put_contents($log_file, $entry, FILE_APPEND | LOCK_EX);
 }
 
+// Enqueue store-closed script on checkout — works for classic and Blocks checkout
+add_action('wp_enqueue_scripts', 'clover_enqueue_checkout_closed_script');
+function clover_enqueue_checkout_closed_script()
+{
+    if (!is_checkout()) {
+        return;
+    }
+    if (get_option('clover_prevent_orders_when_closed', '0') !== '1') {
+        return;
+    }
+
+    $business_hours = new \Src\BusinessHours\Business_Hours();
+    $status         = $business_hours->get_business_status();
+
+    wp_enqueue_script(
+        'clover-checkout-closed',
+        CLOVER_PLUGIN_URL . 'public/js/checkout-closed.js',
+        array(),
+        '1.0.2',
+        true
+    );
+
+    wp_localize_script('clover-checkout-closed', 'cloverStoreStatus', array(
+        'open'    => (bool) $status['open'],
+        'message' => !empty($status['message']) ? $status['message'] : 'We are currently closed',
+        'error'   => !empty($status['error']),
+    ));
+}
+
+// Hard block for WooCommerce Blocks (Store API) checkout
+// Fires after order is created but before payment — throws RouteException to abort
+add_action('woocommerce_store_api_checkout_order_processed', 'clover_block_order_when_closed_blocks');
+function clover_block_order_when_closed_blocks($order)
+{
+    if (get_option('clover_prevent_orders_when_closed', '0') !== '1') {
+        return;
+    }
+
+    $business_hours = new \Src\BusinessHours\Business_Hours();
+    $status         = $business_hours->get_business_status();
+
+    if (!empty($status['error']) || $status['open']) {
+        return;
+    }
+
+    $when    = !empty($status['message']) ? $status['message'] : 'We are currently closed';
+    $message = $when . '. Please place your order during business hours.';
+
+    // RouteException is the WooCommerce Blocks-native way to abort checkout with a user-facing error
+    if (class_exists('\Automattic\WooCommerce\StoreApi\Exceptions\RouteException')) {
+        throw new \Automattic\WooCommerce\StoreApi\Exceptions\RouteException(
+            'store_closed',
+            $message,
+            400
+        );
+    }
+
+    // Fallback for older WC versions without RouteException
+    throw new \Exception(esc_html($message));
+}
+
 // Enqueue frontend scripts for cart/checkout and product pages
 function clover_enqueue_frontend_scripts()
 {

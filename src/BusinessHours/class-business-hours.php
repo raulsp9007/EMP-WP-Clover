@@ -204,11 +204,12 @@ class Business_Hours {
         $hours_map = $this->parse_hours_structure($data);
 
         if (empty($hours_map)) {
+            clover_log('Business Hours: hours_map empty after parse — check Clover dashboard has hours configured');
             return array(
-                'open' => false,
-                'error' => true,
-                'message' => 'Could not parse hours from API - check credentials and Clover dashboard',
-                'next_open' => null,
+                'open'       => true,  // fail open — don't block orders if hours can't be parsed
+                'error'      => true,
+                'message'    => 'Could not parse hours from API - check credentials and Clover dashboard',
+                'next_open'  => null,
                 'close_time' => null
             );
         }

@@ -15,7 +15,7 @@ All notable changes documented here. Each version = restore point (`git tag vX.X
 
 ### Fixed
 - Auto-Print not working — `printOrder()` now sends `deviceRef.id` to Clover; without it Clover ignores the `/print_event` call
-- Prevent Orders When Closed hierarchy inverted — store hours were checked before category hours; now category-specific hours take precedence, store hours used only as fallback when no category has custom hours configured
+- Prevent Orders When Closed hierarchy corrected — store hours checked first as hard gate; if store is closed all items are blocked; if store is open, category-specific hours are then evaluated per item
 - Prevent Orders When Closed blocks all orders when Clover API fails — changed to fail open so API downtime does not block customer orders
 - Business hours parser only read first time slot per day — now reads all slots (supports split hours e.g. lunch + dinner)
 - Quantity not sent correctly to Clover — atomic order now repeats line item N times for qty > 1 instead of always sending 1

@@ -119,14 +119,19 @@ class WPOrders_Integration
                 'price' => $unit_price_cents,
             ];
 
-            if (!empty($line_item_taxes)) {
-                $line_item['taxRates'] = $line_item_taxes;
-            }
-
             if (!empty($modifications)) {
+                // Item con modifiers: link a catalog item.id para que Clover pueda renderizar el recibo
+                // (items ad-hoc con modifications fallan al imprimir — bug conocido REST API)
+                $line_item['item']          = ['id' => $external_id];
                 $line_item['modifications'] = $modifications;
+            } else {
+                // Item sin modifiers: ad-hoc con taxRates custom (override de Clover catalog taxes)
+                if (!empty($line_item_taxes)) {
+                    $line_item['taxRates'] = $line_item_taxes;
+                }
             }
 
+            // Repetir line item N veces para representar qty (Clover bulk_line_items no usa unitQty para items regulares)
             $qty = max(1, intval($item->get_quantity()));
             for ($i = 0; $i < $qty; $i++) {
                 $lineItems[] = $line_item;
@@ -272,17 +277,16 @@ class WPOrders_Integration
                     }
                 }
 
-                // Auto-print
+                // Auto-print — sends to merchant's default printer (configured in Clover dashboard: Setup > Devices)
                 $auto_print = get_option('clover_auto_print_orders', '1');
                 if ($auto_print === '1') {
                     try {
-                        $device_id     = get_option('clover_device_id', '');
-                        $printResponse = $orderService->printOrder($cloverOrderId, $device_id);
+                        $printResponse = $orderService->printOrder($cloverOrderId);
                         if (isset($printResponse['status']) && $printResponse['status'] >= 200 && $printResponse['status'] < 300) {
-                            clover_log("PRINT: Order {$cloverOrderId} sent to printer");
+                            clover_log("PRINT: Order {$cloverOrderId} sent to default printer");
                             $order->add_order_note('Order sent to Clover printer');
                         } else {
-                            clover_log("PRINT FAILED for {$cloverOrderId}: status " . ($printResponse['status'] ?? 'unknown'));
+                            clover_log("PRINT FAILED for {$cloverOrderId}: status " . ($printResponse['status'] ?? 'unknown') . ' data=' . print_r($printResponse['data'] ?? [], true));
                         }
                     } catch (\Exception $e) {
                         clover_log('PRINT ERROR: ' . $e->getMessage());

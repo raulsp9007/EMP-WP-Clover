@@ -252,8 +252,6 @@ function clover_tab_discount_price_html($price_html, $product)
     $apply   = get_option('clover_discount_apply_to_orders', '0');
     $percent = floatval(get_option('clover_discount_cached_percent', '0'));
 
-    clover_log("TAB DISCOUNT HTML — apply={$apply} percent={$percent} product=" . $product->get_id());
-
     if ($apply !== '1' || $percent <= 0) return $price_html;
 
     $regular_price = get_post_meta($product->get_id(), '_regular_price', true);

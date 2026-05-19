@@ -58,7 +58,8 @@ class WPOrders_Integration
             array_filter($all_tax_rates, fn($tr) => in_array($tr['id'], $enabled_tax_ids))
         ));
 
-        // Build line items — ad-hoc (no item.id) so taxRates overrides are respected by Clover
+        // Build line items — include item.id (SKU) so Clover links to catalog item (required for printing)
+        // taxRates also sent; for catalog items Clover may use catalog-level taxes instead of override
         $lineItems = [];
 
         foreach ($order->get_items() as $item) {
@@ -115,6 +116,7 @@ class WPOrders_Integration
             $unit_price_cents = intval(round($base_price * 100));
 
             $line_item = [
+                'item'  => ['id' => $external_id],
                 'name'  => $product->get_name(),
                 'price' => $unit_price_cents,
             ];

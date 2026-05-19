@@ -115,6 +115,7 @@ class WPOrders_Integration
             $unit_price_cents = intval(round($base_price * 100));
 
             $line_item = [
+                'item'  => ['id' => $external_id],
                 'name'  => $product->get_name(),
                 'price' => $unit_price_cents,
             ];

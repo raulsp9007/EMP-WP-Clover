@@ -142,6 +142,19 @@ class Custom_Modifier_System
     }
 
     /**
+     * Extract size value from modifier name (e.g., "10"" or "12 inches" → "10" or "12")
+     */
+    private static function extract_size_from_name($name)
+    {
+        // Match patterns like: 10", 10'', 10 inches, 12", 12 inches, etc.
+        // Only match at the START of the string to avoid matching numbers later in the name
+        if (preg_match('/^(\d+)\s*(?:inches?|["\'])/i', $name, $matches)) {
+            return $matches[1];  // Return just the number
+        }
+        return null;
+    }
+
+    /**
      * Display modifiers on product page
      */
     public function display_modifiers()
@@ -237,17 +250,6 @@ class Custom_Modifier_System
         // Get product name for portion labels
         $product_name = $product->get_name();
 
-        // Helper function to extract size value from modifier name (e.g., "10"", "12 inches")
-        function extract_size_from_name($name)
-        {
-            // Match patterns like: 10", 10'', 10 inches, 12", 12 inches, etc.
-            // Only match at the START of the string to avoid matching numbers later in the name
-            if (preg_match('/^(\d+)\s*(?:inches?|["\'])/i', $name, $matches)) {
-                return $matches[1];  // Return just the number
-            }
-            return null;
-        }
-
         // Identify the size group and extract size values
         $size_group_id = null;
         $size_group_modifiers = array();
@@ -259,7 +261,7 @@ class Custom_Modifier_System
                 $size_group_id = $gid;
                 $size_group_modifiers = $group_mods;
                 foreach ($group_mods as $mod) {
-                    $size_val = extract_size_from_name($mod['name']);
+                    $size_val = self::extract_size_from_name($mod['name']);
                     if ($size_val) {
                         $available_sizes[$size_val] = $mod['id'];
                     }
@@ -279,7 +281,7 @@ class Custom_Modifier_System
             $gname = !empty($group_mods[0]['modifier_group_name']) ? $group_mods[0]['modifier_group_name'] : '';
 
             // Check if group name starts with a size pattern
-            $group_size = extract_size_from_name($gname);
+            $group_size = self::extract_size_from_name($gname);
             if ($group_size) {
                 $size_specific_groups[$gid] = $group_size;
             } else {

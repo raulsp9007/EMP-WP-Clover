@@ -142,13 +142,44 @@ class Custom_Modifier_System
     }
 
     /**
+     * Extract size value from modifier name (e.g., "10"" or "12 inches" → "10" or "12")
+     */
+    private static function extract_size_from_name($name)
+    {
+        // Match patterns like: 10", 10'', 10 inches, 12", 12 inches, etc.
+        // Only match at the START of the string to avoid matching numbers later in the name
+        if (preg_match('/^(\d+)\s*(?:inches?|["\'])/i', $name, $matches)) {
+            return $matches[1];  // Return just the number
+        }
+        return null;
+    }
+
+    /**
      * Display modifiers on product page
      */
     public function display_modifiers()
     {
         global $product;
 
-        $modifiers_json = get_post_meta($product->get_id(), '_clover_modifiers', true);
+        // On single product page, skip related/upsell products — only render for the main queried product.
+        // Related products also trigger this hook and would inject duplicate scripts, causing JS handler
+        // accumulation and repeated button text.
+        if (is_product() && $product->get_id() !== get_queried_object_id()) {
+            return;
+        }
+
+        // Prevent duplicate injection when the theme re-renders the add-to-cart form more than once
+        // for the same product (e.g. Astra's sticky add-to-cart bar). A second injection creates a
+        // second script block with duplicate event handlers — jQuery's .text() getter then concatenates
+        // text from all matched buttons, causing exponential button text growth on every price update.
+        static $rendered_product_ids = [];
+        $product_id = $product->get_id();
+        if (isset($rendered_product_ids[$product_id])) {
+            return;
+        }
+        $rendered_product_ids[$product_id] = true;
+
+        $modifiers_json = get_post_meta($product_id, '_clover_modifiers', true);
         if (empty($modifiers_json)) {
             return;
         }
@@ -159,13 +190,13 @@ class Custom_Modifier_System
         }
 
         // Get servings count (for multi-portion products)
-        $servings_count = get_post_meta($product->get_id(), '_clover_servings', true);
+        $servings_count = get_post_meta($product_id, '_clover_servings', true);
         if (empty($servings_count) || $servings_count < 1) {
             $servings_count = 1;
         }
 
         // Get modifier group constraints
-        $constraints_json = get_post_meta($product->get_id(), '_clover_modifier_constraints', true);
+        $constraints_json = get_post_meta($product_id, '_clover_modifier_constraints', true);
         $constraints = !empty($constraints_json) ? json_decode($constraints_json, true) : array();
 
         // Get the original product price to store for calculations
@@ -237,17 +268,6 @@ class Custom_Modifier_System
         // Get product name for portion labels
         $product_name = $product->get_name();
 
-        // Helper function to extract size value from modifier name (e.g., "10"", "12 inches")
-        function extract_size_from_name($name)
-        {
-            // Match patterns like: 10", 10'', 10 inches, 12", 12 inches, etc.
-            // Only match at the START of the string to avoid matching numbers later in the name
-            if (preg_match('/^(\d+)\s*(?:inches?|["\'])/i', $name, $matches)) {
-                return $matches[1];  // Return just the number
-            }
-            return null;
-        }
-
         // Identify the size group and extract size values
         $size_group_id = null;
         $size_group_modifiers = array();
@@ -259,7 +279,7 @@ class Custom_Modifier_System
                 $size_group_id = $gid;
                 $size_group_modifiers = $group_mods;
                 foreach ($group_mods as $mod) {
-                    $size_val = extract_size_from_name($mod['name']);
+                    $size_val = self::extract_size_from_name($mod['name']);
                     if ($size_val) {
                         $available_sizes[$size_val] = $mod['id'];
                     }
@@ -279,7 +299,7 @@ class Custom_Modifier_System
             $gname = !empty($group_mods[0]['modifier_group_name']) ? $group_mods[0]['modifier_group_name'] : '';
 
             // Check if group name starts with a size pattern
-            $group_size = extract_size_from_name($gname);
+            $group_size = self::extract_size_from_name($gname);
             if ($group_size) {
                 $size_specific_groups[$gid] = $group_size;
             } else {
@@ -428,16 +448,23 @@ class Custom_Modifier_System
                     $clover_id = isset($modifier['clover_id']) ? esc_attr($modifier['clover_id']) : '';
 
                     // Apply global discount if enabled
-                    $discount_enabled = get_option('clover_global_discount_enabled', '0');
-                    $discount_percent = get_option('clover_global_discount_percent', '10');
+                    $discount_enabled   = get_option('clover_global_discount_enabled', '0');
+                    $discount_percent   = get_option('clover_global_discount_percent', '10');
                     $apply_to_modifiers = get_option('clover_global_discount_apply_modifiers', '0');
+
+                    // Apply Clover discount (from Discounts tab) if enabled
+                    $clover_disc_apply   = get_option('clover_discount_apply_to_orders', '0');
+                    $clover_disc_percent = floatval(get_option('clover_discount_cached_percent', '0'));
 
                     $display_price = $modifier_price;
                     $show_discount = false;
 
                     if ($discount_enabled === '1' && $discount_percent > 0 && $apply_to_modifiers === '1') {
-                        $discount = floatval($discount_percent) / 100;
+                        $discount      = floatval($discount_percent) / 100;
                         $display_price = $original_modifier_price * (1 - $discount);
+                        $show_discount = true;
+                    } elseif ($clover_disc_apply === '1' && $clover_disc_percent > 0) {
+                        $display_price = $original_modifier_price * (1 - $clover_disc_percent / 100);
                         $show_discount = true;
                     }
 
@@ -853,7 +880,12 @@ class Custom_Modifier_System
                 var servingsCount = parseInt($('#servings-count').val()) || 1;
                 var allValid = true;
 
-                for (var s = 1; s <= servingsCount; s++) {
+                // Category hours take priority — PHP injects hidden input when closed
+                if ($('#category-hours-closed').val() === '1') {
+                    allValid = false;
+                }
+
+                if (allValid) for (var s = 1; s <= servingsCount; s++) {
                     $('.modifier-group[data-serving="' + s + '"]').each(function() {
                         var groupConstraintText = $(this).find('.modifier-constraint').text();
                         var groupCheckboxes = $(this).find('input[type="checkbox"]');
@@ -921,7 +953,7 @@ class Custom_Modifier_System
                     }
                 }
 
-                var addToCartBtn = $('button[name="addtocart"], .single_add_to_cart_button');
+                var addToCartBtn = $('button[name="addtocart"], .single_add_to_cart_button, .clover-quick-view-add-to-cart');
 
                 if (!allValid) {
                     addToCartBtn.prop('disabled', true);
@@ -990,31 +1022,33 @@ class Custom_Modifier_System
                     // We're on single product page - update page price
                     console.log('=== SINGLE PRODUCT PAGE - Updating price ===');
 
-                    // When discount is enabled, price has structure: <del>original</del> <ins>sale</ins>
-                    // We need to update ONLY the <ins> (sale price), not the <del> (original)
-                    var $salePriceIns = $('ins.woocommerce-Price-amount.amount').first();
+                    // Find the price wrapper on the single product page
+                    var $priceWrapper = $('.summary .price').first();
+                    if ($priceWrapper.length === 0) $priceWrapper = $('.entry-summary .price').first();
+                    if ($priceWrapper.length === 0) $priceWrapper = $('.product .price').first();
 
-                    if ($salePriceIns.length > 0) {
-                        console.log('Updating sale price (ins tag)');
-                        $salePriceIns.text(currencySymbol + formattedTotalPrice);
-                    } else {
-                        // No sale price structure, update normal price
-                        var $priceBdi = $('.woocommerce-Price-amount bdi').first();
-                        if ($priceBdi.length > 0) {
-                            console.log('Updating normal price');
-                            $priceBdi.text(currencySymbol + formattedTotalPrice);
+                    if ($priceWrapper.length > 0) {
+                        if (modifiersPrice > 0) {
+                            // Show base crossed out + combined (sale price style)
+                            var baseFormatted = currencySymbol + parseFloat(originalBasePrice).toFixed(2);
+                            $priceWrapper.html(
+                                '<del aria-hidden="true"><span class="woocommerce-Price-amount amount"><bdi>' + baseFormatted + '</bdi></span></del> ' +
+                                '<ins><span class="woocommerce-Price-amount amount"><bdi>' + currencySymbol + formattedTotalPrice + '</bdi></span></ins>'
+                            );
                         } else {
-                            // Fallback: try to find any price element
-                            var $priceAmount = $('.woocommerce-Price-amount.amount').first();
-                            if ($priceAmount.length > 0) {
-                                var $bdi = $priceAmount.find('bdi').first();
-                                if ($bdi.length > 0) {
-                                    $bdi.text(currencySymbol + formattedTotalPrice);
-                                } else {
-                                    $priceAmount.text(currencySymbol + formattedTotalPrice);
-                                }
-                            }
+                            // Restore plain base price
+                            $priceWrapper.html('<span class="woocommerce-Price-amount amount"><bdi>' + currencySymbol + formattedTotalPrice + '</bdi></span>');
                         }
+                    }
+
+                    // Update Add to Cart button to always show current price.
+                    // Use .first().text() to read from a single element — jQuery's .text() getter
+                    // concatenates text from ALL matched elements, which doubles the string when
+                    // themes like Astra render a second button (sticky add-to-cart bar).
+                    var $addToCartBtn = $('button.single_add_to_cart_button');
+                    if ($addToCartBtn.length > 0) {
+                        var btnText = $addToCartBtn.first().text().replace(/\s*-\s*\$[\d.,]+$/, '').trim();
+                        $addToCartBtn.text(btnText + ' - ' + currencySymbol + formattedTotalPrice);
                     }
                 }
             }
@@ -1028,6 +1062,9 @@ class Custom_Modifier_System
                     validateConstraints(portion);
                 }, 1000, p);
             }
+
+            // Initialize button price on page load
+            updateProductPrice();
         });
         </script>
         <style>
@@ -1276,7 +1313,7 @@ class Custom_Modifier_System
         $apply_discount = ($discount_enabled === '1' && $discount_percent > 0 && $apply_to_modifiers === '1');
         $discount_multiplier = 1 - (floatval($discount_percent) / 100);
 
-        foreach ($cart->get_cart() as $cart_item) {
+        foreach ($cart->get_cart() as $cart_item_key => $cart_item) {
             if (isset($cart_item['custom_modifiers']) && is_array($cart_item['custom_modifiers'])) {
                 $product_id = $cart_item['product_id'];
                 $modifiers_json = get_post_meta($product_id, '_clover_modifiers', true);
@@ -1320,8 +1357,8 @@ class Custom_Modifier_System
                         }
                     }
 
-                    // Store charged modifier data in cart item for persistence to order
-                    $cart_item['clover_charged_modifiers'] = $charged_modifiers;
+                    // Store charged modifier data in the actual WC cart session (not the local copy)
+                    WC()->cart->cart_contents[$cart_item_key]['clover_charged_modifiers'] = $charged_modifiers;
 
                     // Get base price from database (before ANY filters)
                     $base_price = get_post_meta($product_id, '_regular_price', true);
@@ -1383,6 +1420,18 @@ class Custom_Modifier_System
                 $apply_to_modifiers = get_option('clover_global_discount_apply_modifiers', '0');
                 $show_discount = ($discount_enabled === '1' && $discount_percent > 0 && $apply_to_modifiers === '1');
 
+                // Prepend base price as first line so customer sees the breakdown
+                $base_price = floatval(get_post_meta($product_id, '_regular_price', true));
+                if ($base_price > 0) {
+                    if ($discount_enabled === '1' && floatval($discount_percent) > 0) {
+                        $base_price = $base_price * (1 - floatval($discount_percent) / 100);
+                    }
+                    $item_data[] = array(
+                        'key'   => __('Base price', 'woocommerce'),
+                        'value' => wc_price($base_price),
+                    );
+                }
+
                 foreach ($selected_modifiers as $serving_key => $serving_modifiers) {
                     // Extract serving number from key (e.g., "1" from "1" or "serving_1")
                     $serving_num = is_numeric($serving_key)
@@ -1432,6 +1481,7 @@ class Custom_Modifier_System
 
         return $item_data;
     }
+
 
     /**
      * Add modifier data to order items

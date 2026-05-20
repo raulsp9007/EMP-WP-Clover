@@ -2540,6 +2540,11 @@ function clover_add_quick_view_button_at_position()
 
 function clover_add_quick_view_button()
 {
+    // Never show quick view button on single product pages.
+    if (is_product()) {
+        return;
+    }
+
     // Check if quick view is enabled
     $show_button = get_option('clover_quick_view_show_button', '1');
     if ($show_button !== '1') {

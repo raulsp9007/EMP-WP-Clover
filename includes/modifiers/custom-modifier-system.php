@@ -161,6 +161,13 @@ class Custom_Modifier_System
     {
         global $product;
 
+        // On single product page, skip related/upsell products — only render for the main queried product.
+        // Related products also trigger this hook and would inject duplicate scripts, causing JS handler
+        // accumulation and repeated button text.
+        if (is_product() && $product->get_id() !== get_queried_object_id()) {
+            return;
+        }
+
         $modifiers_json = get_post_meta($product->get_id(), '_clover_modifiers', true);
         if (empty($modifiers_json)) {
             return;

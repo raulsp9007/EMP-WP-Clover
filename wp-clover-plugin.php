@@ -133,6 +133,7 @@ function clover_plugin_init()
     add_action('wp_ajax_clover_import_items', 'clover_import_items_ajax');
     add_action('wp_ajax_clover_reload_tenders', 'clover_reload_tenders');
     add_action('wp_ajax_nopriv_clover_reload_tenders', 'clover_reload_tenders');
+    add_action('wp_ajax_clover_reload_service_charges', 'clover_reload_service_charges');
 
     // Logs AJAX handlers
     add_action('wp_ajax_clover_get_logs', 'clover_get_logs');
@@ -1083,6 +1084,41 @@ function clover_reload_discounts()
         }
 
         wp_send_json_success(array('discounts' => $discounts));
+    } catch (Exception $e) {
+        wp_send_json_error(array('error' => $e->getMessage()));
+    }
+}
+
+function clover_reload_service_charges()
+{
+    if (!wp_verify_nonce($_POST['nonce'], 'clover_reload_service_charges')) {
+        wp_send_json_error(array('error' => 'Security check failed'));
+    }
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('error' => 'Insufficient permissions'));
+    }
+
+    $config       = require CLOVER_PLUGIN_PATH . 'config/api.php';
+    $orderService = new \Src\Services\OrderService($config);
+
+    try {
+        $response = $orderService->getServiceCharges();
+        $charges  = array();
+
+        if (isset($response['data']['elements']) && is_array($response['data']['elements'])) {
+            foreach ($response['data']['elements'] as $sc) {
+                $pct_raw = isset($sc['percentage']) ? intval($sc['percentage']) : 0;
+                $charges[] = array(
+                    'id'         => $sc['id'] ?? '',
+                    'name'       => $sc['name'] ?? 'Unnamed',
+                    'percentage' => $pct_raw,
+                    'percent'    => $pct_raw > 0 ? round($pct_raw / 10000, 4) : 0,
+                );
+            }
+        }
+
+        update_option('clover_service_charges_cache', json_encode($charges));
+        wp_send_json_success(array('service_charges' => $charges));
     } catch (Exception $e) {
         wp_send_json_error(array('error' => $e->getMessage()));
     }

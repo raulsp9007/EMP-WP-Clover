@@ -181,6 +181,24 @@ class OrderService extends BaseService
         return $this->post("/orders/{$orderId}/line_items/{$lineItemId}/tax_rates", $payload);
     }
 
+    public function getServiceCharges(array $params = []): array
+    {
+        return $this->get('/order_fees', $params);
+    }
+
+    // $serviceCharge = ['name' => '...', 'percentage' => 83750] (percentage × 10,000)
+    public function applyServiceChargeToOrder(string $orderId, array $serviceCharge): array
+    {
+        $body = [
+            'name'       => $serviceCharge['name'],
+            'isOrderFee' => true,
+        ];
+        if (!empty($serviceCharge['percentage'])) {
+            $body['percentage'] = intval($serviceCharge['percentage']);
+        }
+        return $this->post("/orders/{$orderId}/order_fee_line_items", $body);
+    }
+
     public function getDiscounts(array $params = []): array
     {
         return $this->get('/discounts', $params);

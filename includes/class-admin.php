@@ -1626,6 +1626,7 @@ class Clover_Admin
     }
 
 
+
     public function discounts_section_callback()
     {
         echo '<p>Select a discount from your Clover catalog to automatically apply to all orders sent from WooCommerce.</p>';
@@ -1873,6 +1874,12 @@ class Clover_Admin
                             echo '<input type="hidden" name="clover_enabled_tax_rates[]" value="' . esc_attr($tax_id) . '" />';
                         }
                     }
+                }
+
+                // Cache fields are registered settings but have no form input — WordPress would wipe them on save.
+                // Emit hidden fields to preserve their values when saving the taxes tab.
+                if ($active_tab === 'taxes') {
+                    echo '<input type="hidden" name="clover_tax_rates_cache" value="' . esc_attr(get_option('clover_tax_rates_cache', '[]')) . '" />';
                 }
 
                 // Display settings based on active tab

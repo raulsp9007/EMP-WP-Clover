@@ -53,10 +53,9 @@ class WPOrders_Integration
         if (!is_array($enabled_tax_ids)) $enabled_tax_ids = [];
         $all_tax_rates     = json_decode(get_option('clover_tax_rates_cache', '[]'), true) ?: [];
         $line_item_taxes   = array_values(array_filter($all_tax_rates, fn($tr) => in_array($tr['id'], $enabled_tax_ids)));
-        // Default taxes → post-creation via addTaxRateToLineItem (Tax section of receipt)
-        // Non-default taxes → ad-hoc line items with calculated amount (visible on receipt as line item)
-        $default_taxes     = array_values(array_filter($line_item_taxes, fn($tr) => !empty($tr['isDefault'])));
-        $non_default_taxes = array_values(array_filter($line_item_taxes, fn($tr) =>  empty($tr['isDefault'])));
+        // Default taxes: Clover applies them automatically for catalog items (item.id links to catalog).
+        // Non-default taxes: sent as ad-hoc calculated line items so they appear on the receipt.
+        $non_default_taxes = array_values(array_filter($line_item_taxes, fn($tr) => empty($tr['isDefault'])));
 
         // Build line items — item.id (SKU) links to Clover catalog item (required for printing)
         $lineItems = [];
@@ -305,37 +304,9 @@ class WPOrders_Integration
                     clover_log("EMPLOYEE PATCHED: {$employee_id} on order {$cloverOrderId}");
                 }
 
-                // Default taxes → addTaxRateToLineItem per catalog line item (shows in Tax section of receipt)
-                // Non-default taxes already added as calculated ad-hoc line items in the payload
-                if (!empty($default_taxes)) {
-                    $created_items        = $response['data']['lineItems']['elements'] ?? [];
-                    $catalog_items_taxed  = 0;
-                    foreach ($created_items as $created_item) {
-                        $line_item_id = $created_item['id'] ?? null;
-                        if (!$line_item_id) continue;
-                        // Skip ad-hoc line items (no item.id) — non-default tax line items are ad-hoc
-                        // Applying default tax to them would double-charge (tax on tax)
-                        if (empty($created_item['item']['id'])) {
-                            clover_log("TAX SKIP ad-hoc line item {$line_item_id} (no item.id — not a catalog item)");
-                            continue;
-                        }
-                        foreach ($default_taxes as $tax_rate) {
-                            try {
-                                $orderService->addTaxRateToLineItem($cloverOrderId, $line_item_id, [
-                                    'id'        => $tax_rate['id'],
-                                    'name'      => $tax_rate['name'] ?? '',
-                                    'rate'      => intval($tax_rate['rate'] ?? 0),
-                                    'isDefault' => !empty($tax_rate['isDefault']),
-                                ]);
-                            } catch (\Exception $e) {
-                                clover_log("TAX APPLY ERROR: line_item={$line_item_id} tax={$tax_rate['id']} — " . $e->getMessage());
-                            }
-                        }
-                        $catalog_items_taxed++;
-                    }
-                    clover_log("DEFAULT TAXES APPLIED: {$catalog_items_taxed} catalog line items × " . count($default_taxes) . " rates on order {$cloverOrderId}");
-                }
-
+                // Default taxes are applied automatically by Clover for catalog items (item.id links to catalog).
+                // Calling addTaxRateToLineItem on top would duplicate taxes → Clover silently drops print_event.
+                // Non-default taxes are handled as ad-hoc line items in the payload above.
 
                 // Mark as paid
                 $auto_mark_paid = get_option('clover_auto_mark_as_paid', '1');

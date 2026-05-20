@@ -1041,10 +1041,13 @@ class Custom_Modifier_System
                         }
                     }
 
-                    // Update Add to Cart button to always show current price
+                    // Update Add to Cart button to always show current price.
+                    // Use .first().text() to read from a single element — jQuery's .text() getter
+                    // concatenates text from ALL matched elements, which doubles the string when
+                    // themes like Astra render a second button (sticky add-to-cart bar).
                     var $addToCartBtn = $('button.single_add_to_cart_button');
                     if ($addToCartBtn.length > 0) {
-                        var btnText = $addToCartBtn.text().replace(/\s*-\s*\$[\d.,]+$/, '').trim();
+                        var btnText = $addToCartBtn.first().text().replace(/\s*-\s*\$[\d.,]+$/, '').trim();
                         $addToCartBtn.text(btnText + ' - ' + currencySymbol + formattedTotalPrice);
                     }
                 }

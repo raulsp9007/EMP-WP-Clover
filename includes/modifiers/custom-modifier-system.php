@@ -161,7 +161,25 @@ class Custom_Modifier_System
     {
         global $product;
 
-        $modifiers_json = get_post_meta($product->get_id(), '_clover_modifiers', true);
+        // On single product page, skip related/upsell products — only render for the main queried product.
+        // Related products also trigger this hook and would inject duplicate scripts, causing JS handler
+        // accumulation and repeated button text.
+        if (is_product() && $product->get_id() !== get_queried_object_id()) {
+            return;
+        }
+
+        // Prevent duplicate injection when the theme re-renders the add-to-cart form more than once
+        // for the same product (e.g. Astra's sticky add-to-cart bar). A second injection creates a
+        // second script block with duplicate event handlers — jQuery's .text() getter then concatenates
+        // text from all matched buttons, causing exponential button text growth on every price update.
+        static $rendered_product_ids = [];
+        $product_id = $product->get_id();
+        if (isset($rendered_product_ids[$product_id])) {
+            return;
+        }
+        $rendered_product_ids[$product_id] = true;
+
+        $modifiers_json = get_post_meta($product_id, '_clover_modifiers', true);
         if (empty($modifiers_json)) {
             return;
         }
@@ -172,13 +190,13 @@ class Custom_Modifier_System
         }
 
         // Get servings count (for multi-portion products)
-        $servings_count = get_post_meta($product->get_id(), '_clover_servings', true);
+        $servings_count = get_post_meta($product_id, '_clover_servings', true);
         if (empty($servings_count) || $servings_count < 1) {
             $servings_count = 1;
         }
 
         // Get modifier group constraints
-        $constraints_json = get_post_meta($product->get_id(), '_clover_modifier_constraints', true);
+        $constraints_json = get_post_meta($product_id, '_clover_modifier_constraints', true);
         $constraints = !empty($constraints_json) ? json_decode($constraints_json, true) : array();
 
         // Get the original product price to store for calculations
@@ -1023,10 +1041,13 @@ class Custom_Modifier_System
                         }
                     }
 
-                    // Update Add to Cart button to always show current price
+                    // Update Add to Cart button to always show current price.
+                    // Use .first().text() to read from a single element — jQuery's .text() getter
+                    // concatenates text from ALL matched elements, which doubles the string when
+                    // themes like Astra render a second button (sticky add-to-cart bar).
                     var $addToCartBtn = $('button.single_add_to_cart_button');
                     if ($addToCartBtn.length > 0) {
-                        var btnText = $addToCartBtn.text().replace(/\s*-\s*\$[\d.,]+$/, '').trim();
+                        var btnText = $addToCartBtn.first().text().replace(/\s*-\s*\$[\d.,]+$/, '').trim();
                         $addToCartBtn.text(btnText + ' - ' + currencySymbol + formattedTotalPrice);
                     }
                 }

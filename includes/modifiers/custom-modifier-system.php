@@ -168,7 +168,18 @@ class Custom_Modifier_System
             return;
         }
 
-        $modifiers_json = get_post_meta($product->get_id(), '_clover_modifiers', true);
+        // Prevent duplicate injection when the theme re-renders the add-to-cart form more than once
+        // for the same product (e.g. Astra's sticky add-to-cart bar). A second injection creates a
+        // second script block with duplicate event handlers — jQuery's .text() getter then concatenates
+        // text from all matched buttons, causing exponential button text growth on every price update.
+        static $rendered_product_ids = [];
+        $product_id = $product->get_id();
+        if (isset($rendered_product_ids[$product_id])) {
+            return;
+        }
+        $rendered_product_ids[$product_id] = true;
+
+        $modifiers_json = get_post_meta($product_id, '_clover_modifiers', true);
         if (empty($modifiers_json)) {
             return;
         }
@@ -179,13 +190,13 @@ class Custom_Modifier_System
         }
 
         // Get servings count (for multi-portion products)
-        $servings_count = get_post_meta($product->get_id(), '_clover_servings', true);
+        $servings_count = get_post_meta($product_id, '_clover_servings', true);
         if (empty($servings_count) || $servings_count < 1) {
             $servings_count = 1;
         }
 
         // Get modifier group constraints
-        $constraints_json = get_post_meta($product->get_id(), '_clover_modifier_constraints', true);
+        $constraints_json = get_post_meta($product_id, '_clover_modifier_constraints', true);
         $constraints = !empty($constraints_json) ? json_decode($constraints_json, true) : array();
 
         // Get the original product price to store for calculations

@@ -66,12 +66,13 @@ class OrderService extends BaseService
 
     public function createAtomicOrder(array $payload): array
     {
-        clover_log('POST: ' . print_r($payload, true));
-        // clover_log('PRUEBA');
-        //  $body_json = json_encode($payload, JSON_PRETTY_PRINT);
-        //  clover_log($body_json);
-        // clover_log($payload);
-        return [];  // $this->post('/atomic_order/orders', $payload); //[];
+        return $this->post('/atomic_order/orders', $payload);
+    }
+
+    // PATCH /orders/{orderId} — update order fields (employee, note, etc.)
+    public function updateOrder(string $orderId, array $payload): array
+    {
+        return $this->post("/orders/{$orderId}", $payload);
     }
 
     // Nuevo método para crear una orden básica
@@ -95,15 +96,32 @@ class OrderService extends BaseService
         return $this->post("/orders/{$orderId}/line_items/{$lineItemId}/modifications", $payload);
     }
 
-    // Nuevo método para enviar orden a impresora Clover
-    public function printOrder(string $orderId): array
+    // Get all devices registered in the merchant account
+    public function getDevices(): array
+    {
+        return $this->get('/devices');
+    }
+
+    // Get all printers registered in the merchant account
+    public function getPrinters(): array
+    {
+        return $this->get('/printers');
+    }
+
+    // Enviar orden a impresora via Clover print_event.
+    // $deviceId is required for API-initiated calls — without it Clover creates the event
+    // but no device picks it up (no "firing device" context from a server-side call).
+    public function printOrder(string $orderId, string $deviceId = ''): array
     {
         $payload = [
-            'orderRef' => [
-                'id' => $orderId
-            ]
+            'orderRef' => ['id' => $orderId],
         ];
-        clover_log('PRINT ORDER: Sending order ' . $orderId . ' to printer');
+
+        if (!empty($deviceId)) {
+            $payload['deviceRef'] = ['id' => $deviceId];
+        }
+
+        clover_log('PRINT ORDER: Sending order ' . $orderId . ' to device ' . ($deviceId ?: 'none (may not fire)'));
         return $this->post('/print_event', $payload);
     }
 
@@ -157,6 +175,39 @@ class OrderService extends BaseService
     public function getOrderTypes(): array
     {
         return $this->get('/order_types');
+    }
+
+    public function updateLineItem(string $orderId, string $lineItemId, array $payload): array
+    {
+        return $this->post("/orders/{$orderId}/line_items/{$lineItemId}", $payload);
+    }
+
+    public function addTaxRateToLineItem(string $orderId, string $lineItemId, array $payload): array
+    {
+        return $this->post("/orders/{$orderId}/line_items/{$lineItemId}/tax_rates", $payload);
+    }
+
+    public function getServiceCharges(array $params = []): array
+    {
+        return $this->get('/order_fees', $params);
+    }
+
+    // $serviceCharge = ['name' => '...', 'percentage' => 83750] (percentage × 10,000)
+    public function applyServiceChargeToOrder(string $orderId, array $serviceCharge): array
+    {
+        $body = [
+            'name'       => $serviceCharge['name'],
+            'isOrderFee' => true,
+        ];
+        if (!empty($serviceCharge['percentage'])) {
+            $body['percentage'] = intval($serviceCharge['percentage']);
+        }
+        return $this->post("/orders/{$orderId}/order_fee_line_items", $body);
+    }
+
+    public function getDiscounts(array $params = []): array
+    {
+        return $this->get('/discounts', $params);
     }
 
     // Public method to get raw data from any endpoint

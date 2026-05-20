@@ -102,19 +102,18 @@ class Business_Hours {
 
         foreach ($days as $day) {
             if (isset($config[$day]['elements']) && is_array($config[$day]['elements']) && !empty($config[$day]['elements'])) {
-                // Get the first time slot for this day
-                $slot = $config[$day]['elements'][0];
-
-                if (isset($slot['start'], $slot['end'])) {
-                    $start_min = $this->parse_hhmm_to_minutes($slot['start']);
-                    $end_min = $this->parse_hhmm_to_minutes($slot['end']);
-
-                    if ($start_min !== false && $end_min !== false) {
-                        $hours_map[strtoupper($day)] = array(
-                            'open' => $start_min,
-                            'close' => $end_min
-                        );
+                $slots = array();
+                foreach ($config[$day]['elements'] as $slot) {
+                    if (isset($slot['start'], $slot['end'])) {
+                        $start_min = $this->parse_hhmm_to_minutes($slot['start']);
+                        $end_min   = $this->parse_hhmm_to_minutes($slot['end']);
+                        if ($start_min !== false && $end_min !== false) {
+                            $slots[] = array('open' => $start_min, 'close' => $end_min);
+                        }
                     }
+                }
+                if (!empty($slots)) {
+                    $hours_map[strtoupper($day)] = $slots;
                 }
             }
         }
@@ -189,14 +188,14 @@ class Business_Hours {
      */
     private function get_status_from_hours_data($data) {
         if (is_wp_error($data) || isset($data['error'])) {
-            // Log the actual error for debugging
+            // Log error but fail OPEN — don't block orders because of API failures
             clover_log('Clover Business Hours API Error: ' . (is_wp_error($data) ? $data->get_error_message() : ($data['error'] ?? 'Unknown error')));
-            
+
             return array(
-                'open' => false,
-                'error' => true,
-                'message' => 'Hours unavailable',
-                'next_open' => null,
+                'open'       => true,  // fail open — API down should not block orders
+                'error'      => true,
+                'message'    => 'Hours unavailable',
+                'next_open'  => null,
                 'close_time' => null
             );
         }
@@ -205,11 +204,12 @@ class Business_Hours {
         $hours_map = $this->parse_hours_structure($data);
 
         if (empty($hours_map)) {
+            clover_log('Business Hours: hours_map empty after parse — check Clover dashboard has hours configured');
             return array(
-                'open' => false,
-                'error' => true,
-                'message' => 'Could not parse hours from API - check credentials and Clover dashboard',
-                'next_open' => null,
+                'open'       => true,  // fail open — don't block orders if hours can't be parsed
+                'error'      => true,
+                'message'    => 'Could not parse hours from API - check credentials and Clover dashboard',
+                'next_open'  => null,
                 'close_time' => null
             );
         }
@@ -252,50 +252,59 @@ class Business_Hours {
 
         $day_order = array('MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY');
 
-        // === CHECK CURRENT DAY ===
+        // === CHECK CURRENT DAY — iterate all slots ===
         if (isset($hours_map[$current_day_upper])) {
-            $today = $hours_map[$current_day_upper];
-            $open = $today['open'];
-            $close = $today['close'];
+            $today_slots  = $hours_map[$current_day_upper];
+            $next_slot_ts = null; // earliest future slot opening today
 
-            // Handle overnight hours (e.g., 22:00 - 02:00)
-            if ($close < $open) {
-                // Open late night, close early morning next day
-                if ($current_minutes >= $open || $current_minutes < $close) {
-                    return array(
-                        'open' => true,
-                        'error' => false,
-                        'message' => 'Open until ' . $this->format_minutes_to_time($close),
-                        'next_open' => null,
-                        'close_time' => $close
-                    );
+            foreach ($today_slots as $slot) {
+                $open  = $slot['open'];
+                $close = $slot['close'];
+
+                // Overnight slot (e.g. 22:00–02:00)
+                if ($close < $open) {
+                    if ($current_minutes >= $open || $current_minutes < $close) {
+                        return array(
+                            'open'       => true,
+                            'error'      => false,
+                            'message'    => 'Open until ' . $this->format_minutes_to_time($close),
+                            'next_open'  => null,
+                            'close_time' => $close
+                        );
+                    }
+                } else {
+                    // Normal slot
+                    if ($current_minutes >= $open && $current_minutes < $close) {
+                        $close_ts = strtotime(date('Y-m-d', $now) . ' ' . sprintf('%02d:%02d:00', floor($close / 60), $close % 60));
+                        return array(
+                            'open'       => true,
+                            'error'      => false,
+                            'message'    => 'Open until ' . $this->format_minutes_to_time($close),
+                            'next_open'  => null,
+                            'close_time' => $close,
+                            'next_close' => $close_ts
+                        );
+                    }
+                    // Future slot today — track earliest
+                    if ($current_minutes < $open) {
+                        $ts = strtotime(date('Y-m-d', $now) . ' ' . sprintf('%02d:%02d:00', floor($open / 60), $open % 60));
+                        if ($next_slot_ts === null || $ts < $next_slot_ts) {
+                            $next_slot_ts  = $ts;
+                            $next_slot_min = $open;
+                        }
+                    }
                 }
-            } else {
-                // Normal hours
-                if ($current_minutes >= $open && $current_minutes < $close) {
-                    // Calculate closing timestamp
-                    $close_timestamp = strtotime(date('Y-m-d', $now) . ' ' . sprintf('%02d:%02d:00', floor($close/60), $close%60));
-                    
-                    return array(
-                        'open' => true,
-                        'error' => false,
-                        'message' => 'Open until ' . $this->format_minutes_to_time($close),
-                        'next_open' => null,
-                        'close_time' => $close,
-                        'next_close' => $close_timestamp // Add this
-                    );
-                }
-                // Closed now, but opens LATER today
-                if ($current_minutes < $open) {
-                    $next_open_ts = strtotime(date('Y-m-d', $now) . ' ' . sprintf('%02d:%02d:00', floor($open / 60), $open % 60));
-                    return array(
-                        'open' => false,
-                        'error' => false,
-                        'message' => 'Opens today at ' . $this->format_minutes_to_time($open),
-                        'next_open' => $next_open_ts,
-                        'next_open_day' => 'today'
-                    );
-                }
+            }
+
+            // Closed now, but there's a later slot today
+            if ($next_slot_ts !== null) {
+                return array(
+                    'open'          => false,
+                    'error'         => false,
+                    'message'       => 'Opens today at ' . $this->format_minutes_to_time($next_slot_min),
+                    'next_open'     => $next_slot_ts,
+                    'next_open_day' => 'today'
+                );
             }
         }
 
@@ -369,10 +378,13 @@ class Business_Hours {
                 $day_order = array('MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY');
                 foreach ($day_order as $day) {
                     if (isset($hours_map[$day])) {
-                        $d = ucfirst(strtolower($day));
-                        $o = $this->format_minutes_to_time($hours_map[$day]['open']);
-                        $c = $this->format_minutes_to_time($hours_map[$day]['close']);
-                        echo "<tr><td><strong>{$d}</strong></td><td>{$o} - {$c}</td></tr>";
+                        $d     = ucfirst(strtolower($day));
+                        $slots = $hours_map[$day];
+                        $times = array();
+                        foreach ($slots as $slot) {
+                            $times[] = $this->format_minutes_to_time($slot['open']) . ' - ' . $this->format_minutes_to_time($slot['close']);
+                        }
+                        echo '<tr><td><strong>' . esc_html($d) . '</strong></td><td>' . esc_html(implode(', ', $times)) . '</td></tr>';
                     }
                 }
                 echo '</tbody></table>';

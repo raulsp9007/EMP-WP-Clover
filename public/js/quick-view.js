@@ -190,6 +190,12 @@
         var $modal = $('#clover-quick-view-modal');
         console.log('📦 Modal exists:', $modal.length > 0);
         
+        // Block loop Add to Cart click when category is unavailable (CSS pointer-events backup)
+        $(document).on('click', '.add_to_cart_button.category-unavailable', function(e) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+        });
+
         // Attach button click handler
         $(document).off('click', '.clover-quick-view-btn').on('click', '.clover-quick-view-btn', function(e) {
             e.preventDefault();

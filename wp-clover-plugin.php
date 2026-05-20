@@ -2,9 +2,10 @@
 
 /**
  * Plugin Name: WPCloverSync
- * Description: A plugin to sync WP and Clover via API
+ * Description: Integrates WooCommerce with Clover POS — syncs products, modifiers, taxes, employees, order types, and business hours. Orders placed in WooCommerce are automatically sent to Clover POS.
  * Version: 1.0.1
- * Author: MML1357
+ * Author: Ermis Media Production
+ * Author URI: https://ermismedia.com
  */
 
 // Prevent direct access
@@ -132,6 +133,7 @@ function clover_plugin_init()
     add_action('wp_ajax_clover_import_items', 'clover_import_items_ajax');
     add_action('wp_ajax_clover_reload_tenders', 'clover_reload_tenders');
     add_action('wp_ajax_nopriv_clover_reload_tenders', 'clover_reload_tenders');
+    add_action('wp_ajax_clover_reload_service_charges', 'clover_reload_service_charges');
 
     // Logs AJAX handlers
     add_action('wp_ajax_clover_get_logs', 'clover_get_logs');
@@ -223,6 +225,193 @@ function clover_force_product_on_sale($is_on_sale, $product)
     return $is_on_sale;
 }
 
+// ── Clover Discount tab: visual price display ────────────────────────────────
+
+add_filter('woocommerce_product_get_price', 'clover_apply_tab_discount_price', 25, 2);
+add_filter('woocommerce_product_get_regular_price', 'clover_apply_tab_discount_price', 25, 2);
+
+function clover_apply_tab_discount_price($price, $product)
+{
+    if (is_admin()) return $price;
+    // Global discount takes priority — avoid double discount
+    if (get_option('clover_global_discount_enabled', '0') === '1') return $price;
+
+    $apply   = get_option('clover_discount_apply_to_orders', '0');
+    $percent = floatval(get_option('clover_discount_cached_percent', '0'));
+
+    if ($apply !== '1' || $percent <= 0 || !is_numeric($price) || $price <= 0) return $price;
+
+    return $price * (1 - $percent / 100);
+}
+
+add_filter('woocommerce_get_price_html', 'clover_tab_discount_price_html', 15, 2);
+
+function clover_tab_discount_price_html($price_html, $product)
+{
+    if (get_option('clover_global_discount_enabled', '0') === '1') return $price_html;
+
+    $apply   = get_option('clover_discount_apply_to_orders', '0');
+    $percent = floatval(get_option('clover_discount_cached_percent', '0'));
+
+    if ($apply !== '1' || $percent <= 0) return $price_html;
+
+    $regular_price = get_post_meta($product->get_id(), '_regular_price', true);
+    if (empty($regular_price)) return $price_html;
+
+    $sale_price = floatval($regular_price) * (1 - $percent / 100);
+    $price_html = '<del aria-hidden="true" class="woocommerce-Price-amount amount">' . strip_tags(wc_price($regular_price)) . '</del> <ins class="woocommerce-Price-amount amount">' . strip_tags(wc_price($sale_price)) . '</ins>';
+
+    return $price_html;
+}
+
+add_filter('woocommerce_product_is_on_sale', 'clover_tab_discount_is_on_sale', 15, 2);
+
+function clover_tab_discount_is_on_sale($is_on_sale, $product)
+{
+    if (get_option('clover_global_discount_enabled', '0') === '1') return $is_on_sale;
+
+    $apply   = get_option('clover_discount_apply_to_orders', '0');
+    $percent = floatval(get_option('clover_discount_cached_percent', '0'));
+
+    if ($apply === '1' && $percent > 0 && $product->get_price() > 0) return true;
+
+    return $is_on_sale;
+}
+
+// Auto-sync discount cached percent when discount ID is saved
+add_action('updated_option', function ($option, $old, $new) {
+    if ($option !== 'clover_discount_id' || empty($new)) return;
+    try {
+        $config       = require CLOVER_PLUGIN_PATH . 'config/api.php';
+        $orderService = new \Src\Services\OrderService($config);
+        $response     = $orderService->getDiscounts();
+        if (isset($response['data']['elements'])) {
+            foreach ($response['data']['elements'] as $d) {
+                if (($d['id'] ?? '') === $new) {
+                    $percent = isset($d['percentage']) ? intval($d['percentage']) : 0;
+                    update_option('clover_discount_cached_percent', $percent);
+                    clover_log("DISCOUNT SYNC: cached percent={$percent} for discount {$new}");
+                    break;
+                }
+            }
+        }
+    } catch (Exception $e) {
+        clover_log('DISCOUNT SYNC ERROR: ' . $e->getMessage());
+    }
+}, 10, 3);
+
+// ── Service charge as WooCommerce cart fee ────────────────────────────────────
+add_action('woocommerce_cart_calculate_fees', 'clover_add_service_charge_fee');
+function clover_add_service_charge_fee($cart)
+{
+    if (is_admin() && !defined('DOING_AJAX')) return;
+
+    $enabled_ids = get_option('clover_enabled_tax_rates', []);
+    if (!is_array($enabled_ids) || empty($enabled_ids)) return;
+
+    $all_rates = json_decode(get_option('clover_tax_rates_cache', '[]'), true) ?: [];
+
+    foreach ($all_rates as $tr) {
+        if (empty($tr['id'])) continue;
+        if (!in_array($tr['id'], $enabled_ids)) continue;
+
+        $pct_display = $tr['rate'] / 100000; // e.g. 3.0 for 3%
+        if ($pct_display <= 0) continue;
+
+        $fee_amount = $cart->get_subtotal() * ($pct_display / 100);
+        $label = ($tr['name'] ?? 'Fee') . ' (' . rtrim(rtrim(number_format($pct_display, 4), '0'), '.') . '%)';
+        $cart->add_fee($label, $fee_amount, false);
+    }
+}
+
+// ── Settings audit log ───────────────────────────────────────────────────────
+
+add_action('updated_option', 'clover_settings_audit_log', 10, 3);
+
+function clover_settings_audit_log($option_name, $old_value, $new_value)
+{
+    if (strpos($option_name, 'clover_') !== 0) return;
+
+    $log_dir  = CLOVER_PLUGIN_PATH . 'logs/';
+    $log_file = $log_dir . 'settings-audit.log';
+
+    if (!is_dir($log_dir)) {
+        @mkdir($log_dir, 0755, true);
+    }
+
+    $user     = wp_get_current_user();
+    $username = ($user && $user->ID) ? $user->user_login : 'system';
+    $date     = date('Y-m-d H:i:s');
+    $old_str  = is_array($old_value) ? json_encode($old_value) : (string) $old_value;
+    $new_str  = is_array($new_value) ? json_encode($new_value) : (string) $new_value;
+
+    if ($old_str === $new_str) return;
+
+    $entry = "[{$date}] [{$username}] {$option_name}: \"{$old_str}\" → \"{$new_str}\"\n";
+    @file_put_contents($log_file, $entry, FILE_APPEND | LOCK_EX);
+}
+
+// Enqueue store-closed script on checkout — works for classic and Blocks checkout
+add_action('wp_enqueue_scripts', 'clover_enqueue_checkout_closed_script');
+function clover_enqueue_checkout_closed_script()
+{
+    if (!is_checkout()) {
+        return;
+    }
+    if (get_option('clover_prevent_orders_when_closed', '0') !== '1') {
+        return;
+    }
+
+    $business_hours = new \Src\BusinessHours\Business_Hours();
+    $status         = $business_hours->get_business_status();
+
+    wp_enqueue_script(
+        'clover-checkout-closed',
+        CLOVER_PLUGIN_URL . 'public/js/checkout-closed.js',
+        array(),
+        '1.0.2',
+        true
+    );
+
+    wp_localize_script('clover-checkout-closed', 'cloverStoreStatus', array(
+        'open'    => (bool) $status['open'],
+        'message' => !empty($status['message']) ? $status['message'] : 'We are currently closed',
+        'error'   => !empty($status['error']),
+    ));
+}
+
+// Hard block for WooCommerce Blocks (Store API) checkout
+// Fires after order is created but before payment — throws RouteException to abort
+add_action('woocommerce_store_api_checkout_order_processed', 'clover_block_order_when_closed_blocks');
+function clover_block_order_when_closed_blocks($order)
+{
+    if (get_option('clover_prevent_orders_when_closed', '0') !== '1') {
+        return;
+    }
+
+    $business_hours = new \Src\BusinessHours\Business_Hours();
+    $status         = $business_hours->get_business_status();
+
+    if (!empty($status['error']) || $status['open']) {
+        return;
+    }
+
+    $when    = !empty($status['message']) ? $status['message'] : 'We are currently closed';
+    $message = $when . '. Please place your order during business hours.';
+
+    // RouteException is the WooCommerce Blocks-native way to abort checkout with a user-facing error
+    if (class_exists('\Automattic\WooCommerce\StoreApi\Exceptions\RouteException')) {
+        throw new \Automattic\WooCommerce\StoreApi\Exceptions\RouteException(
+            'store_closed',
+            $message,
+            400
+        );
+    }
+
+    // Fallback for older WC versions without RouteException
+    throw new \Exception(esc_html($message));
+}
+
 // Enqueue frontend scripts for cart/checkout and product pages
 function clover_enqueue_frontend_scripts()
 {
@@ -258,46 +447,48 @@ function clover_enqueue_frontend_scripts()
     ));
 }
 
-// Validate cart when store/category is closed (softer approach - keeps UI visible)
-add_filter('woocommerce_add_to_cart_validation', 'clover_validate_cart_when_closed', 10, 3);
-function clover_validate_cart_when_closed($passed, $product_id, $quantity)
+// Show closed-store notice above the Place Order button in checkout
+add_action('woocommerce_review_order_before_submit', 'clover_checkout_closed_notice');
+function clover_checkout_closed_notice()
 {
-    $prevent_orders = get_option('clover_prevent_orders_when_closed', '0');
-    
-    if ($prevent_orders !== '1') {
-        return $passed;
+    if (get_option('clover_prevent_orders_when_closed', '0') !== '1') {
+        return;
     }
-    
-    // 1. Check Store Hours
+
     $business_hours = new \Src\BusinessHours\Business_Hours();
-    $status = $business_hours->get_business_status();
-    
-    if (!$status['open']) {
-        wc_add_notice('Our store is currently closed. Please check back during business hours.', 'error');
-        return false;
+    $status         = $business_hours->get_business_status();
+
+    // API error or store open — show nothing
+    if (!empty($status['error']) || $status['open']) {
+        return;
     }
-    
-    // 2. Check Category Hours
-    $categories = get_the_terms($product_id, 'product_cat');
-    if ($categories && !is_wp_error($categories)) {
-        $all_categories_closed = true;
-        
-        foreach ($categories as $category) {
-            // If any category is open, the product is available
-            if (!clover_is_category_closed($category->term_id)) {
-                $all_categories_closed = false;
-                break;
-            }
-        }
-        
-        // If all categories are closed, block the product
-        if ($all_categories_closed) {
-            wc_add_notice('This item is currently unavailable. Please check back during business hours.', 'error');
-            return false;
-        }
+
+    $when    = !empty($status['message']) ? $status['message'] : 'We are currently closed';
+    $message = esc_html($when) . '. Orders cannot be placed while the store is closed.';
+
+    echo '<div class="woocommerce-error clover-store-closed-notice" style="margin-bottom:16px;">'
+        . $message
+        . '</div>';
+}
+
+// Hard block at order submission when store is closed
+add_action('woocommerce_checkout_process', 'clover_block_order_when_closed');
+function clover_block_order_when_closed()
+{
+    if (get_option('clover_prevent_orders_when_closed', '0') !== '1') {
+        return;
     }
-    
-    return $passed;
+
+    $business_hours = new \Src\BusinessHours\Business_Hours();
+    $status         = $business_hours->get_business_status();
+
+    // API error → fail open (don't block due to API downtime)
+    if (!empty($status['error']) || $status['open']) {
+        return;
+    }
+
+    $when = !empty($status['message']) ? $status['message'] : 'We are currently closed';
+    wc_add_notice($when . '. Please place your order during business hours.', 'error');
 }
 
 // Helper function to check if a category is currently closed based on custom hours
@@ -338,9 +529,11 @@ function clover_is_category_closed($category_id)
 
     foreach ($day_config['elements'] as $interval) {
         if (isset($interval['start']) && isset($interval['end'])) {
-            $start = $interval['start'];
-            $end = $interval['end'];
-            
+            // Stored as HHMM integer (e.g. 900 = 9:00 AM, 2200 = 10:00 PM).
+            // Convert to minutes-since-midnight before comparing with $current_minutes.
+            $start = (int)floor($interval['start'] / 100) * 60 + ($interval['start'] % 100);
+            $end   = (int)floor($interval['end']   / 100) * 60 + ($interval['end']   % 100);
+
             if ($end < $start) { // Overnight
                 if ($current_minutes >= $start || $current_minutes < $end) {
                     return false; // Open
@@ -354,6 +547,81 @@ function clover_is_category_closed($category_id)
     }
 
     return true; // Closed
+}
+
+/**
+ * Get product availability based on category-specific hours only.
+ * Returns ['available' => bool, 'message' => string].
+ *
+ * Rule: if a category has "Enable Category Hours = yes", its Opening Hours
+ * determine availability. Categories without custom hours never restrict.
+ */
+function clover_get_product_availability($product_id)
+{
+    $categories = get_the_terms($product_id, 'product_cat');
+    if (!$categories || is_wp_error($categories)) {
+        return ['available' => true, 'message' => ''];
+    }
+
+    foreach ($categories as $cat) {
+        // Only categories with custom hours enabled are evaluated
+        $enabled = get_term_meta($cat->term_id, 'category_hours_enabled', true);
+        if ($enabled !== 'yes') {
+            continue;
+        }
+
+        if (clover_is_category_closed($cat->term_id)) {
+            $business_hours = new \Src\BusinessHours\Business_Hours();
+            $cat_status     = $business_hours->get_business_status($cat->term_id);
+            $msg            = !empty($cat_status['message']) ? $cat_status['message'] : 'Currently unavailable';
+            return ['available' => false, 'message' => $msg];
+        }
+    }
+
+    return ['available' => true, 'message' => ''];
+}
+
+// ── Single product page & quick view ─────────────────────────────────────────
+// Outputs a hidden input (read by modifier-system JS) + visible notice.
+add_action('woocommerce_before_add_to_cart_button', 'clover_output_availability_check', 5);
+function clover_output_availability_check()
+{
+    global $product;
+    if (!$product) return;
+
+    $avail = clover_get_product_availability($product->get_id());
+    if (!$avail['available']) {
+        echo '<input type="hidden" id="category-hours-closed" value="1">';
+        echo '<input type="hidden" id="category-hours-message" value="' . esc_attr($avail['message']) . '">';
+        echo '<p class="category-hours-notice" style="color:#dc3545;font-size:0.9em;font-weight:500;margin:0 0 10px 0;">' . esc_html($avail['message']) . '</p>';
+    }
+}
+
+// ── Shop loop product cards ───────────────────────────────────────────────────
+// Adds CSS class + aria-disabled to the loop Add to Cart button.
+add_filter('woocommerce_loop_add_to_cart_args', 'clover_loop_add_to_cart_args', 10, 2);
+function clover_loop_add_to_cart_args($args, $product)
+{
+    $avail = clover_get_product_availability($product->get_id());
+    if (!$avail['available']) {
+        $args['class'] .= ' category-unavailable';
+        $args['attributes']['aria-disabled']        = 'true';
+        $args['attributes']['data-unavailable-msg'] = $avail['message'];
+    }
+    return $args;
+}
+
+// Outputs unavailability message below loop button (priority 11 = after WC button at 10).
+add_action('woocommerce_after_shop_loop_item', 'clover_loop_unavailability_message', 11);
+function clover_loop_unavailability_message()
+{
+    global $product;
+    if (!$product) return;
+
+    $avail = clover_get_product_availability($product->get_id());
+    if (!$avail['available']) {
+        echo '<p class="category-hours-notice" style="color:#dc3545;font-size:0.8em;margin:4px 0 0;text-align:center;">' . esc_html($avail['message']) . '</p>';
+    }
 }
 
 // AJAX handler for API requests
@@ -606,10 +874,8 @@ function clover_reload_employees()
                         : (($employee['firstName'] ?? '') . ' ' . ($employee['lastName'] ?? ''))
                 );
                 $employees[] = array(
-                    'id'        => $employee['id'] ?? '',
-                    'name'      => $full_name ?: ($employee['id'] ?? ''),
-                    'firstName' => $employee['firstName'] ?? '',
-                    'lastName'  => $employee['lastName'] ?? '',
+                    'id'   => $employee['id'] ?? '',
+                    'name' => $full_name ?: ($employee['id'] ?? ''),
                 );
             }
         }
@@ -745,6 +1011,114 @@ function clover_reload_tenders()
         }
 
         wp_send_json_success(array('tenders' => $tenders));
+    } catch (Exception $e) {
+        wp_send_json_error(array('error' => $e->getMessage()));
+    }
+}
+
+add_action('wp_ajax_clover_reload_tax_rates', 'clover_reload_tax_rates');
+
+function clover_reload_tax_rates()
+{
+    if (!wp_verify_nonce($_POST['nonce'], 'clover_reload_tax_rates')) {
+        wp_send_json_error(array('error' => 'Security check failed'));
+    }
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('error' => 'Insufficient permissions'));
+    }
+
+    $config       = require CLOVER_PLUGIN_PATH . 'config/api.php';
+    $orderService = new \Src\Services\OrderService($config);
+
+    try {
+        $response  = $orderService->getTaxRates();
+        $tax_rates = array();
+
+        if (isset($response['data']['elements']) && is_array($response['data']['elements'])) {
+            foreach ($response['data']['elements'] as $t) {
+                $rate_raw   = isset($t['rate']) ? intval($t['rate']) : 0;
+                $percent    = round($rate_raw / 100000, 4) + 0;
+                $tax_rates[] = array(
+                    'id'         => $t['id'] ?? '',
+                    'name'       => $t['name'] ?? 'Unnamed',
+                    'percent'    => $percent,
+                    'is_default' => !empty($t['isDefault']),
+                );
+            }
+        }
+
+        wp_send_json_success(array('tax_rates' => $tax_rates));
+    } catch (Exception $e) {
+        wp_send_json_error(array('error' => $e->getMessage()));
+    }
+}
+
+add_action('wp_ajax_clover_reload_discounts', 'clover_reload_discounts');
+
+function clover_reload_discounts()
+{
+    if (!wp_verify_nonce($_POST['nonce'], 'clover_reload_discounts')) {
+        wp_send_json_error(array('error' => 'Security check failed'));
+    }
+
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('error' => 'Insufficient permissions'));
+    }
+
+    $config       = require CLOVER_PLUGIN_PATH . 'config/api.php';
+    $orderService = new \Src\Services\OrderService($config);
+
+    try {
+        $response  = $orderService->getDiscounts();
+        $discounts = array();
+
+        if (isset($response['data']['elements']) && is_array($response['data']['elements'])) {
+            foreach ($response['data']['elements'] as $d) {
+                $discounts[] = array(
+                    'id'         => $d['id'] ?? '',
+                    'name'       => $d['name'] ?? ($d['id'] ?? ''),
+                    'percentage' => isset($d['percentage']) ? intval($d['percentage']) : null,
+                    'amount'     => isset($d['amount']) ? intval($d['amount']) : null,
+                );
+            }
+        }
+
+        wp_send_json_success(array('discounts' => $discounts));
+    } catch (Exception $e) {
+        wp_send_json_error(array('error' => $e->getMessage()));
+    }
+}
+
+function clover_reload_service_charges()
+{
+    if (!wp_verify_nonce($_POST['nonce'], 'clover_reload_service_charges')) {
+        wp_send_json_error(array('error' => 'Security check failed'));
+    }
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('error' => 'Insufficient permissions'));
+    }
+
+    $config       = require CLOVER_PLUGIN_PATH . 'config/api.php';
+    $orderService = new \Src\Services\OrderService($config);
+
+    try {
+        $response = $orderService->getServiceCharges();
+        $charges  = array();
+
+        if (isset($response['data']['elements']) && is_array($response['data']['elements'])) {
+            foreach ($response['data']['elements'] as $sc) {
+                $pct_raw = isset($sc['percentage']) ? intval($sc['percentage']) : 0;
+                $charges[] = array(
+                    'id'         => $sc['id'] ?? '',
+                    'name'       => $sc['name'] ?? 'Unnamed',
+                    'percentage' => $pct_raw,
+                    'percent'    => $pct_raw > 0 ? round($pct_raw / 10000, 4) : 0,
+                );
+            }
+        }
+
+        update_option('clover_service_charges_cache', json_encode($charges));
+        wp_send_json_success(array('service_charges' => $charges));
     } catch (Exception $e) {
         wp_send_json_error(array('error' => $e->getMessage()));
     }
@@ -1984,6 +2358,14 @@ function clover_quick_view_product_handler()
                     <!-- Load modifiers from existing system -->
                     <div class="clover-quick-view-modifiers-wrapper" id="quick-view-modifiers-<?php echo esc_attr($product_id); ?>">
                         <?php
+                        // Check availability before modifiers so the inline script can read it
+                        $qv_avail = clover_get_product_availability($product_id);
+                        if (!$qv_avail['available']) {
+                            // Hidden inputs read by updateAddToCartButton() JS
+                            echo '<input type="hidden" id="category-hours-closed" value="1">';
+                            echo '<input type="hidden" id="category-hours-message" value="' . esc_attr($qv_avail['message']) . '">';
+                        }
+
                         // Temporarily override the display to capture modifiers
                         global $product;
                         $original_product = $product;
@@ -2016,9 +2398,18 @@ function clover_quick_view_product_handler()
                 </div>
             </div>
 
-            <button type="button" class="clover-quick-view-add-to-cart" data-product-id="<?php echo esc_attr($product_id); ?>">
+            <?php // $qv_avail already computed above in modifiers wrapper ?>
+            <button type="button"
+                class="clover-quick-view-add-to-cart<?php echo !$qv_avail['available'] ? ' disabled' : ''; ?>"
+                data-product-id="<?php echo esc_attr($product_id); ?>"
+                <?php echo !$qv_avail['available'] ? 'disabled' : ''; ?>>
                 Add to Cart - <?php echo $price_html; ?>
             </button>
+            <?php if (!$qv_avail['available']): ?>
+            <p class="category-hours-notice" style="color:#dc3545;font-size:0.85em;font-weight:500;margin:6px 0 0;text-align:center;">
+                <?php echo esc_html($qv_avail['message']); ?>
+            </p>
+            <?php endif; ?>
         </div>
     </div>
     <?php

@@ -344,6 +344,13 @@
     cursor: not-allowed;
 }
 
+/* Category hours — unavailable products (loop cards) */
+.add_to_cart_button.category-unavailable {
+    opacity: 0.5;
+    pointer-events: none;
+    cursor: not-allowed;
+}
+
 /* Quick View Button - Match WooCommerce Add to Cart button */
 .clover-quick-view-btn {
     display: inline-block;

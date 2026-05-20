@@ -15,10 +15,7 @@ class Plugin
         }
         self::$initialized = true;
 
-        clover_log('PLUGIN INIT EJECUTADO');
-
-
-       // Registrar el CRON
+        // Registrar el CRON
         add_action('init', [self::class, 'registerCustomerSyncCron']);
         add_action('clover_daily_customer_sync', [self::class, 'executeCustomerSync']);
     }

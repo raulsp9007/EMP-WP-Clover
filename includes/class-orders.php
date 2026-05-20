@@ -337,7 +337,8 @@ class WPOrders_Integration
                 $auto_print = get_option('clover_auto_print_orders', '1');
                 if ($auto_print === '1') {
                     try {
-                        $printResponse = $orderService->printOrder($cloverOrderId);
+                        $printer_device_id = get_option('clover_printer_device_id', '');
+                        $printResponse = $orderService->printOrder($cloverOrderId, $printer_device_id);
                         if (isset($printResponse['status']) && $printResponse['status'] >= 200 && $printResponse['status'] < 300) {
                             clover_log("PRINT: Order {$cloverOrderId} sent to default printer");
                             $order->add_order_note('Order sent to Clover printer');

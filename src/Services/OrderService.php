@@ -108,14 +108,20 @@ class OrderService extends BaseService
         return $this->get('/printers');
     }
 
-    // Enviar orden a impresora default del merchant via Clover print_event
-    public function printOrder(string $orderId): array
+    // Enviar orden a impresora via Clover print_event.
+    // $deviceId is required for API-initiated calls — without it Clover creates the event
+    // but no device picks it up (no "firing device" context from a server-side call).
+    public function printOrder(string $orderId, string $deviceId = ''): array
     {
         $payload = [
             'orderRef' => ['id' => $orderId],
         ];
 
-        clover_log('PRINT ORDER: Sending order ' . $orderId . ' to merchant default printer');
+        if (!empty($deviceId)) {
+            $payload['deviceRef'] = ['id' => $deviceId];
+        }
+
+        clover_log('PRINT ORDER: Sending order ' . $orderId . ' to device ' . ($deviceId ?: 'none (may not fire)'));
         return $this->post('/print_event', $payload);
     }
 

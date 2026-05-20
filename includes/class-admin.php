@@ -141,6 +141,7 @@ class Clover_Admin
         register_setting('clover_settings', 'clover_token', array($this, 'sanitize_token'));
         register_setting('clover_settings', 'clover_api_base_url', array($this, 'sanitize_api_base_url'));
         register_setting('clover_settings', 'clover_auto_print_orders', array($this, 'sanitize_auto_print'));
+        register_setting('clover_settings', 'clover_printer_device_id', array($this, 'sanitize_text'));
         register_setting('clover_settings', 'clover_auto_mark_as_paid', array($this, 'sanitize_auto_print'));
         register_setting('clover_settings', 'clover_payment_tender_id', array($this, 'sanitize_text'));
         register_setting('clover_settings', 'clover_import_fee_enabled', array($this, 'sanitize_checkbox'));
@@ -226,6 +227,14 @@ class Clover_Admin
             'clover_auto_print_orders',
             'Auto-Print Orders',
             array($this, 'auto_print_callback'),
+            'clover-settings-orders',
+            'clover_orders_section'
+        );
+
+        add_settings_field(
+            'clover_printer_device_id',
+            'Print Device ID',
+            array($this, 'printer_device_id_callback'),
             'clover-settings-orders',
             'clover_orders_section'
         );
@@ -663,6 +672,16 @@ class Clover_Admin
         echo '<label><input type="checkbox" id="clover_auto_print_orders" name="clover_auto_print_orders" value="1" ' . checked($value, '1', false) . ' /> ';
         echo 'Automatically print orders to Clover printer</label>';
         echo '<p class="description">When enabled, orders will be automatically sent to the Clover printer after being created.</p>';
+    }
+
+    /**
+     * Print Device ID field callback
+     */
+    public function printer_device_id_callback()
+    {
+        $value = get_option('clover_printer_device_id', '');
+        echo '<input type="text" id="clover_printer_device_id" name="clover_printer_device_id" value="' . esc_attr($value) . '" class="regular-text" placeholder="e.g. 926766ca-5636-8598-e959-6e3c6fe047e1" />';
+        echo '<p class="description">Clover device ID that will receive print jobs. Find it in Clover Dashboard under <strong>Setup &gt; Devices</strong>, or from the <code>GET /devices</code> API response. Required for auto-print to work.</p>';
     }
 
     /**
@@ -1840,7 +1859,7 @@ class Clover_Admin
                 // Hidden fields to preserve settings from other tabs when saving one tab
                 $tab_options = array(
                     'api' => array('clover_merchid', 'clover_token', 'clover_api_base_url'),
-                    'orders' => array('clover_auto_print_orders', 'clover_auto_mark_as_paid', 'clover_payment_tender_id', 'clover_employee_id', 'clover_default_order_type_id'),
+                    'orders' => array('clover_auto_print_orders', 'clover_printer_device_id', 'clover_auto_mark_as_paid', 'clover_payment_tender_id', 'clover_employee_id', 'clover_default_order_type_id'),
                     'pricing' => array('clover_import_fee_enabled', 'clover_import_fee_percent', 'clover_global_discount_enabled', 'clover_global_discount_percent', 'clover_global_discount_apply_modifiers'),
                     'hours'   => array('clover_prevent_orders_when_closed', 'clover_bh_show_banner', 'clover_bh_banner_position', 'clover_bh_show_countdown'),
                     'quickview' => array('clover_quick_view_show_button', 'clover_quick_view_show_on_shop', 'clover_quick_view_show_on_category', 'clover_quick_view_show_on_tag', 'clover_quick_view_show_on_pages', 'clover_quick_view_show_on_posts', 'clover_quick_view_button_text', 'clover_quick_view_button_position'),

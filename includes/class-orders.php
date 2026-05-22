@@ -298,6 +298,27 @@ class WPOrders_Integration
                 $cloverOrderId = $response['data']['id'];
                 clover_log("ATOMIC ORDER CREATED: {$cloverOrderId}");
 
+                // Print FIRST — before any post-creation API calls.
+                // Clover treats a paid order differently: print_event on a paid/closed order generates
+                // a payment receipt (shows only first item) instead of a full order ticket.
+                // Printing immediately after atomic creation guarantees the order is still open,
+                // so all line items appear on the printed ticket. (Guardrail R1)
+                $auto_print = get_option('clover_auto_print_orders', '1');
+                if ($auto_print === '1') {
+                    try {
+                        $printer_device_id = get_option('clover_printer_device_id', '');
+                        $printResponse = $orderService->printOrder($cloverOrderId, $printer_device_id);
+                        if (isset($printResponse['status']) && $printResponse['status'] >= 200 && $printResponse['status'] < 300) {
+                            clover_log("PRINT: Order {$cloverOrderId} sent to default printer");
+                            $order->add_order_note('Order sent to Clover printer');
+                        } else {
+                            clover_log("PRINT FAILED for {$cloverOrderId}: status " . ($printResponse['status'] ?? 'unknown') . ' data=' . print_r($printResponse['data'] ?? [], true));
+                        }
+                    } catch (\Exception $e) {
+                        clover_log('PRINT ERROR: ' . $e->getMessage());
+                    }
+                }
+
                 // Clover ignores employee in atomic order payload — patch explicitly
                 if (!empty($employee_id)) {
                     $orderService->updateOrder($cloverOrderId, ['employee' => ['id' => $employee_id]]);
@@ -330,23 +351,6 @@ class WPOrders_Integration
                         }
                     } else {
                         clover_log("PAYMENT: No tender ID configured — order will be UNPAID in Clover.");
-                    }
-                }
-
-                // Auto-print — sends to merchant's default printer (configured in Clover dashboard: Setup > Devices)
-                $auto_print = get_option('clover_auto_print_orders', '1');
-                if ($auto_print === '1') {
-                    try {
-                        $printer_device_id = get_option('clover_printer_device_id', '');
-                        $printResponse = $orderService->printOrder($cloverOrderId, $printer_device_id);
-                        if (isset($printResponse['status']) && $printResponse['status'] >= 200 && $printResponse['status'] < 300) {
-                            clover_log("PRINT: Order {$cloverOrderId} sent to default printer");
-                            $order->add_order_note('Order sent to Clover printer');
-                        } else {
-                            clover_log("PRINT FAILED for {$cloverOrderId}: status " . ($printResponse['status'] ?? 'unknown') . ' data=' . print_r($printResponse['data'] ?? [], true));
-                        }
-                    } catch (\Exception $e) {
-                        clover_log('PRINT ERROR: ' . $e->getMessage());
                     }
                 }
 

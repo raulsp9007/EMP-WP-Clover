@@ -113,23 +113,26 @@ class WPOrders_Integration
 
             $unit_price_cents = intval(round($base_price * 100));
 
-            // Clover's printer silently drops line items with price:0 — even catalog items.
-            // When the base price is $0 (item priced entirely via modifiers), move the
-            // modifier amounts into the line item price and zero them out on each modifier.
-            // Modifier names still appear on the ticket; the total shows on the item line.
+            // Clover's printer silently drops catalog line items with price:0.
+            // When the base price is $0 (item priced entirely via modifiers), flatten
+            // modifier names into the item name and set price = sum of modifier amounts.
+            // The modifications[] array is omitted to avoid double-counting.
+            // Result on ticket: "Sodas Can And 2 Liter - Coca Cola" at $1.60 — correct
+            // price, readable for kitchen staff, and printer will not skip the item.
             if ($unit_price_cents === 0 && !empty($modifications)) {
-                $mods_total = array_sum(array_column($modifications, 'amount'));
+                $mods_total      = array_sum(array_column($modifications, 'amount'));
+                $mod_names       = implode(', ', array_column($modifications, 'name'));
                 $unit_price_cents = $mods_total;
-                $modifications = array_map(function ($m) {
-                    $m['amount'] = 0;
-                    return $m;
-                }, $modifications);
-                clover_log("PRICE:0 FIX: '{$product->get_name()}' — moved modifier total {$mods_total}c to item price, zeroed modifier amounts");
+                $item_name       = $product->get_name() . ' - ' . $mod_names;
+                $modifications   = []; // omit — price is already rolled into item price
+                clover_log("PRICE:0 FIX: '{$product->get_name()}' — flattened mods '{$mod_names}' into name, price={$mods_total}c");
+            } else {
+                $item_name = $product->get_name();
             }
 
             $line_item = [
                 'item'  => ['id' => $external_id],
-                'name'  => $product->get_name(),
+                'name'  => $item_name,
                 'price' => $unit_price_cents,
             ];
 

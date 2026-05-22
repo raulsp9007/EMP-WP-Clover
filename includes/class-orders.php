@@ -58,10 +58,14 @@ class WPOrders_Integration
         $non_default_taxes = array_values(array_filter($line_item_taxes, fn($tr) => empty($tr['isDefault'])));
 
         // Build line items — item.id (SKU) links to Clover catalog item (required for printing)
-        $lineItems  = [];
+        $lineItems       = [];
         // Collect items/fees that won't appear on Clover kitchen ticket so we can add them to the note.
         // Clover printer drops: (1) ad-hoc items (no item.id), (2) catalog items with effective price $0.
-        $note_fees  = [];
+        $note_fees       = [];
+        // Track catalog items with price:0 so we can PATCH their price post-creation.
+        // Key = SKU (item.id), value = modifier total in cents.
+        // Clover overrides price for catalog items — PATCH after atomic may allow override.
+        $zero_price_items = [];
 
         foreach ($order->get_items() as $item) {
             $product = $item->get_product();
@@ -126,12 +130,15 @@ class WPOrders_Integration
             }
 
             // Clover printer silently drops catalog items with effective price $0.
-            // Add them to $note_fees so kitchen sees them via the order note.
+            // Two-layer workaround:
+            // 1. Track SKU → mods_total for post-creation PATCH (C2 fix — may override Clover catalog price).
+            // 2. Always add to $note_fees as fallback in case PATCH does not affect print rendering.
             if ($unit_price_cents === 0 && !empty($modifications)) {
-                $mods_total_cents = array_sum(array_column($modifications, 'amount'));
-                $mod_names        = implode(', ', array_column($modifications, 'name'));
-                $note_fees[]      = $product->get_name() . ' (' . $mod_names . '): $' . number_format($mods_total_cents / 100, 2);
-                clover_log("NOTE: price:0 item '{$product->get_name()}' added to order note — printer drops $0 catalog items.");
+                $mods_total_cents              = array_sum(array_column($modifications, 'amount'));
+                $mod_names                     = implode(', ', array_column($modifications, 'name'));
+                $zero_price_items[$external_id] = $mods_total_cents;
+                $note_fees[]                   = $product->get_name() . ' (' . $mod_names . '): $' . number_format($mods_total_cents / 100, 2);
+                clover_log("PRICE:0 TRACKED: SKU '{$external_id}' mods_total={$mods_total_cents}c — will PATCH post-creation.");
             }
 
             // taxRates NOT in payload — applied post-creation via addTaxRateToLineItem
@@ -329,6 +336,29 @@ class WPOrders_Integration
                 // device receives the job before the ticket is fully renderable and silently drops it.
                 // 2s confirmed sufficient in testing; reduce to 1s once stable.
                 sleep(2);
+
+                // C2 fix: PATCH price for catalog items with price:0 base.
+                // Clover overrides price in the atomic payload with catalog price ($0).
+                // After creation, the order is still OPEN — attempt to override via line_items endpoint.
+                // If Clover respects the PATCH, item appears with correct price on printed ticket.
+                if (!empty($zero_price_items)) {
+                    $created_line_items = $response['data']['lineItems']['elements'] ?? [];
+                    foreach ($created_line_items as $li) {
+                        $li_sku   = $li['item']['id'] ?? null;
+                        $li_id    = $li['id'] ?? null;
+                        $li_price = $li['price'] ?? -1;
+                        if ($li_sku && $li_id && $li_price === 0 && isset($zero_price_items[$li_sku])) {
+                            $new_price = $zero_price_items[$li_sku];
+                            try {
+                                $patchResp = $orderService->updateLineItem($cloverOrderId, $li_id, ['price' => $new_price]);
+                                clover_log("PRICE:0 PATCH: line_item {$li_id} SKU={$li_sku} price={$new_price}c status=" . ($patchResp['status'] ?? 'unknown'));
+                            } catch (\Exception $e) {
+                                clover_log("PRICE:0 PATCH ERROR: {$e->getMessage()}");
+                            }
+                        }
+                    }
+                }
+
                 $auto_print = get_option('clover_auto_print_orders', '1');
                 if ($auto_print === '1') {
                     try {

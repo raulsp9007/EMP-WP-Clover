@@ -113,31 +113,33 @@ class WPOrders_Integration
 
             $unit_price_cents = intval(round($base_price * 100));
 
-            // Clover's printer silently drops catalog line items with price:0.
-            // When the base price is $0 (item priced entirely via modifiers), flatten
-            // modifier names into the item name and set price = sum of modifier amounts.
-            // The modifications[] array is omitted to avoid double-counting.
-            // Result on ticket: "Sodas Can And 2 Liter - Coca Cola" at $1.60 — correct
-            // price, readable for kitchen staff, and printer will not skip the item.
+            // Clover overrides the price field for catalog items (item.id) with the catalog
+            // price. Items with catalog price $0 cannot be made non-zero via the payload,
+            // so the printer always sees $0 and silently drops them.
+            // Fix: for price:0 catalog items with modifiers, send as an ad-hoc item
+            // (no item.id) with modifier names flattened into the item name and price =
+            // sum of modifier amounts. Ad-hoc items are not price-overridden by Clover.
             if ($unit_price_cents === 0 && !empty($modifications)) {
-                $mods_total      = array_sum(array_column($modifications, 'amount'));
-                $mod_names       = implode(', ', array_column($modifications, 'name'));
+                $mods_total       = array_sum(array_column($modifications, 'amount'));
+                $mod_names        = implode(', ', array_column($modifications, 'name'));
                 $unit_price_cents = $mods_total;
-                $item_name       = $product->get_name() . ' - ' . $mod_names;
-                $modifications   = []; // omit — price is already rolled into item price
-                clover_log("PRICE:0 FIX: '{$product->get_name()}' — flattened mods '{$mod_names}' into name, price={$mods_total}c");
+                $item_name        = $product->get_name() . ' - ' . $mod_names;
+                $modifications    = [];
+                $line_item = [
+                    // No item.id — ad-hoc so Clover does not override price with $0 catalog value
+                    'name'  => $item_name,
+                    'price' => $unit_price_cents,
+                ];
+                clover_log("PRICE:0 FIX: '{$product->get_name()}' — sent as ad-hoc '{$item_name}', price={$mods_total}c");
             } else {
-                $item_name = $product->get_name();
-            }
-
-            $line_item = [
-                'item'  => ['id' => $external_id],
-                'name'  => $item_name,
-                'price' => $unit_price_cents,
-            ];
-
-            if (!empty($modifications)) {
-                $line_item['modifications'] = $modifications;
+                $line_item = [
+                    'item'  => ['id' => $external_id],
+                    'name'  => $product->get_name(),
+                    'price' => $unit_price_cents,
+                ];
+                if (!empty($modifications)) {
+                    $line_item['modifications'] = $modifications;
+                }
             }
 
             // taxRates NOT in payload — applied post-creation via addTaxRateToLineItem

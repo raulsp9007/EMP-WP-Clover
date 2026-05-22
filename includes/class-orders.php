@@ -303,6 +303,12 @@ class WPOrders_Integration
                 // a payment receipt (shows only first item) instead of a full order ticket.
                 // Printing immediately after atomic creation guarantees the order is still open,
                 // so all line items appear on the printed ticket. (Guardrail R1)
+                //
+                // sleep(2): Clover processes atomic orders with modifications asynchronously.
+                // Firing print_event immediately can race against Clover's internal write — the
+                // device receives the job before the ticket is fully renderable and silently drops it.
+                // 2s confirmed sufficient in testing; reduce to 1s once stable.
+                sleep(2);
                 $auto_print = get_option('clover_auto_print_orders', '1');
                 if ($auto_print === '1') {
                     try {

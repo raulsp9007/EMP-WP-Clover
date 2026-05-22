@@ -49,16 +49,15 @@ class WPOrders_Integration
         $disc_percent = floatval(get_option('clover_global_discount_percent', '0'));
         $disc_on_mods = get_option('clover_global_discount_apply_modifiers', '0');
 
-        // Tax rates to apply on every line item (ad-hoc items accept taxRates)
-        $enabled_tax_ids  = get_option('clover_enabled_tax_rates', []);
+        $enabled_tax_ids   = get_option('clover_enabled_tax_rates', []);
         if (!is_array($enabled_tax_ids)) $enabled_tax_ids = [];
-        $all_tax_rates    = json_decode(get_option('clover_tax_rates_cache', '[]'), true) ?: [];
-        $line_item_taxes  = array_values(array_map(
-            fn($tr) => ['id' => $tr['id']],
-            array_filter($all_tax_rates, fn($tr) => in_array($tr['id'], $enabled_tax_ids))
-        ));
+        $all_tax_rates     = json_decode(get_option('clover_tax_rates_cache', '[]'), true) ?: [];
+        $line_item_taxes   = array_values(array_filter($all_tax_rates, fn($tr) => in_array($tr['id'], $enabled_tax_ids)));
+        // Default taxes: Clover applies them automatically for catalog items (item.id links to catalog).
+        // Non-default taxes: sent as ad-hoc calculated line items so they appear on the receipt.
+        $non_default_taxes = array_values(array_filter($line_item_taxes, fn($tr) => empty($tr['isDefault'])));
 
-        // Build line items — ad-hoc (no item.id) so taxRates overrides are respected by Clover
+        // Build line items — item.id (SKU) links to Clover catalog item (required for printing)
         $lineItems = [];
 
         foreach ($order->get_items() as $item) {
@@ -115,19 +114,92 @@ class WPOrders_Integration
             $unit_price_cents = intval(round($base_price * 100));
 
             $line_item = [
+                'item'  => ['id' => $external_id],
                 'name'  => $product->get_name(),
                 'price' => $unit_price_cents,
             ];
-
-            if (!empty($line_item_taxes)) {
-                $line_item['taxRates'] = $line_item_taxes;
-            }
 
             if (!empty($modifications)) {
                 $line_item['modifications'] = $modifications;
             }
 
-            $lineItems[] = $line_item;
+            // taxRates NOT in payload — applied post-creation via addTaxRateToLineItem
+
+            // Repeat line item N times to represent qty
+            $qty = max(1, intval($item->get_quantity()));
+            for ($i = 0; $i < $qty; $i++) {
+                $lineItems[] = $line_item;
+            }
+        }
+
+        // Capture product subtotal for non-default tax calculation (before shipping/fees)
+        // Include modification amounts so the non-default tax base matches WC's cart subtotal
+        $product_subtotal_cents = 0;
+        foreach ($lineItems as $li) {
+            $product_subtotal_cents += $li['price'];
+            foreach ($li['modifications'] ?? [] as $mod) {
+                $product_subtotal_cents += $mod['amount'] ?? 0;
+            }
+        }
+
+        // Delivery fee — add as ad-hoc line item (no taxRates, no item.id)
+        $shipping_total = floatval($order->get_shipping_total());
+        if ($shipping_total > 0) {
+            $shipping_methods_raw = $order->get_shipping_methods();
+            $shipping_label       = 'Delivery Fee';
+            if (!empty($shipping_methods_raw)) {
+                $sm = reset($shipping_methods_raw);
+                $shipping_label = $sm->get_method_title() ?: $sm->get_name() ?: 'Delivery Fee';
+            }
+            $lineItems[] = [
+                'name'  => $shipping_label,
+                'price' => intval(round($shipping_total * 100)),
+                // No taxRates — delivery fee is tax-exempt
+            ];
+            clover_log("DELIVERY FEE: '{$shipping_label}' = \${$shipping_total}");
+        }
+
+        // Build skip labels from all enabled tax rates added by clover_add_service_charge_fee
+        // All enabled taxes show in WC checkout but go to Clover via addTaxRateToLineItem (tax section), not as line items
+        $tax_fee_labels = [];
+        foreach ($line_item_taxes as $tr) {
+            $pct = isset($tr['rate']) ? $tr['rate'] / 100000 : 0;
+            if ($pct <= 0) continue;
+            $tax_fee_labels[] = strtolower(
+                ($tr['name'] ?? 'Fee') . ' (' . rtrim(rtrim(number_format($pct, 4), '0'), '.') . '%)'
+            );
+        }
+
+        // WooCommerce order fees (e.g. added via woocommerce_cart_calculate_fees)
+        foreach ($order->get_fees() as $fee) {
+            $fee_total = floatval($fee->get_total());
+            if ($fee_total <= 0) continue;
+            $fee_name  = $fee->get_name() ?: 'Fee';
+
+            if (in_array(strtolower($fee_name), $tax_fee_labels)) {
+                clover_log("FEE SKIPPED (enabled tax rate, applied post-creation via addTaxRateToLineItem): '{$fee_name}'");
+                continue;
+            }
+
+            $lineItems[] = [
+                'name'  => $fee_name,
+                'price' => intval(round($fee_total * 100)),
+            ];
+            clover_log("FEE: '{$fee_name}' = \${$fee_total}");
+        }
+
+        // Non-default taxes as ad-hoc line items (catalog items ignore addTaxRateToLineItem for non-default rates)
+        foreach ($non_default_taxes as $tr) {
+            $pct = isset($tr['rate']) ? $tr['rate'] / 100000 : 0;
+            if ($pct <= 0) continue;
+            $tax_cents  = intval(round($product_subtotal_cents * $pct / 100));
+            $pct_label  = rtrim(rtrim(number_format($pct, 4), '0'), '.');
+            $tax_name   = ($tr['name'] ?? 'Tax') . ' (' . $pct_label . '%)';
+            $lineItems[] = [
+                'name'  => $tax_name,
+                'price' => $tax_cents,
+            ];
+            clover_log("NON-DEFAULT TAX LINE ITEM: '{$tax_name}' = " . ($tax_cents / 100));
         }
 
         // Note
@@ -137,14 +209,21 @@ class WPOrders_Integration
 
         if ($user_id > 0) {
             $user = get_user_by('id', $user_id);
-            if ($user) $customer_name = trim($user->first_name . ' ' . $user->last_name);
+            if ($user) {
+                $customer_name = trim($user->first_name . ' ' . $user->last_name);
+            }
+            // WP profile name empty — fall back to billing fields
+            if (empty($customer_name)) {
+                $customer_name = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
+            }
         } else {
+            // Guest: use billing fields from checkout
             $customer_name = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
         }
 
         $note = trim(
-            (!empty($customer_name) ? $customer_name . '. ' : '') .
-            (!empty($customer_note) ? 'Special instructions: ' . $customer_note : '')
+            (!empty($customer_name) ? 'Customer: ' . $customer_name . '. ' : '') .
+            (!empty($customer_note) ? 'Note: ' . $customer_note : '')
         );
 
         // Order type
@@ -164,11 +243,16 @@ class WPOrders_Integration
             $clover_order_type_id = get_option('clover_default_order_type_id', '');
         }
 
+        // Pre-tax total = exact sum of line item prices sent to Clover
+        // Clover adds taxes (from taxRates on each item) on top → final total matches WooCommerce total
+        // Using array_sum of $lineItems prices avoids rounding discrepancies vs WooCommerce's own calculation
+        $clover_pretax_total = array_sum(array_column($lineItems, 'price'));
+
         // Build orderCart
         $orderCart = [
             'lineItems' => $lineItems,
             'note'      => $note,
-            'total'     => intval(round(floatval($order->get_total()) * 100)),
+            'total'     => $clover_pretax_total,
         ];
 
         if (!empty($clover_order_type_id)) {
@@ -214,6 +298,37 @@ class WPOrders_Integration
                 $cloverOrderId = $response['data']['id'];
                 clover_log("ATOMIC ORDER CREATED: {$cloverOrderId}");
 
+                // Print FIRST — before any post-creation API calls.
+                // Clover treats a paid order differently: print_event on a paid/closed order generates
+                // a payment receipt (shows only first item) instead of a full order ticket.
+                // Printing immediately after atomic creation guarantees the order is still open,
+                // so all line items appear on the printed ticket. (Guardrail R1)
+                $auto_print = get_option('clover_auto_print_orders', '1');
+                if ($auto_print === '1') {
+                    try {
+                        $printer_device_id = get_option('clover_printer_device_id', '');
+                        $printResponse = $orderService->printOrder($cloverOrderId, $printer_device_id);
+                        if (isset($printResponse['status']) && $printResponse['status'] >= 200 && $printResponse['status'] < 300) {
+                            clover_log("PRINT: Order {$cloverOrderId} sent to default printer");
+                            $order->add_order_note('Order sent to Clover printer');
+                        } else {
+                            clover_log("PRINT FAILED for {$cloverOrderId}: status " . ($printResponse['status'] ?? 'unknown') . ' data=' . print_r($printResponse['data'] ?? [], true));
+                        }
+                    } catch (\Exception $e) {
+                        clover_log('PRINT ERROR: ' . $e->getMessage());
+                    }
+                }
+
+                // Clover ignores employee in atomic order payload — patch explicitly
+                if (!empty($employee_id)) {
+                    $orderService->updateOrder($cloverOrderId, ['employee' => ['id' => $employee_id]]);
+                    clover_log("EMPLOYEE PATCHED: {$employee_id} on order {$cloverOrderId}");
+                }
+
+                // Default taxes are applied automatically by Clover for catalog items (item.id links to catalog).
+                // Calling addTaxRateToLineItem on top would duplicate taxes → Clover silently drops print_event.
+                // Non-default taxes are handled as ad-hoc line items in the payload above.
+
                 // Mark as paid
                 $auto_mark_paid = get_option('clover_auto_mark_as_paid', '1');
                 if ($auto_mark_paid === '1') {
@@ -236,22 +351,6 @@ class WPOrders_Integration
                         }
                     } else {
                         clover_log("PAYMENT: No tender ID configured — order will be UNPAID in Clover.");
-                    }
-                }
-
-                // Auto-print
-                $auto_print = get_option('clover_auto_print_orders', '1');
-                if ($auto_print === '1') {
-                    try {
-                        $printResponse = $orderService->printOrder($cloverOrderId);
-                        if (isset($printResponse['status']) && $printResponse['status'] >= 200 && $printResponse['status'] < 300) {
-                            clover_log("PRINT: Order {$cloverOrderId} sent to printer");
-                            $order->add_order_note('Order sent to Clover printer');
-                        } else {
-                            clover_log("PRINT FAILED for {$cloverOrderId}: status " . ($printResponse['status'] ?? 'unknown'));
-                        }
-                    } catch (\Exception $e) {
-                        clover_log('PRINT ERROR: ' . $e->getMessage());
                     }
                 }
 

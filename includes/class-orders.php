@@ -58,7 +58,10 @@ class WPOrders_Integration
         $non_default_taxes = array_values(array_filter($line_item_taxes, fn($tr) => empty($tr['isDefault'])));
 
         // Build line items — item.id (SKU) links to Clover catalog item (required for printing)
-        $lineItems = [];
+        $lineItems  = [];
+        // Collect items/fees that won't appear on Clover kitchen ticket so we can add them to the note.
+        // Clover printer drops: (1) ad-hoc items (no item.id), (2) catalog items with effective price $0.
+        $note_fees  = [];
 
         foreach ($order->get_items() as $item) {
             $product = $item->get_product();
@@ -122,6 +125,15 @@ class WPOrders_Integration
                 $line_item['modifications'] = $modifications;
             }
 
+            // Clover printer silently drops catalog items with effective price $0.
+            // Add them to $note_fees so kitchen sees them via the order note.
+            if ($unit_price_cents === 0 && !empty($modifications)) {
+                $mods_total_cents = array_sum(array_column($modifications, 'amount'));
+                $mod_names        = implode(', ', array_column($modifications, 'name'));
+                $note_fees[]      = $product->get_name() . ' (' . $mod_names . '): $' . number_format($mods_total_cents / 100, 2);
+                clover_log("NOTE: price:0 item '{$product->get_name()}' added to order note — printer drops $0 catalog items.");
+            }
+
             // taxRates NOT in payload — applied post-creation via addTaxRateToLineItem
 
             // Repeat line item N times to represent qty
@@ -140,11 +152,6 @@ class WPOrders_Integration
                 $product_subtotal_cents += $mod['amount'] ?? 0;
             }
         }
-
-        // Ad-hoc fees (no item.id) are excluded from Clover's kitchen/order printer by design.
-        // To ensure they appear on the printed ticket, collect them here and append to the
-        // order note — Clover always prints the note on the ticket.
-        $note_fees = [];
 
         // Delivery fee — add as ad-hoc line item (no taxRates, no item.id)
         $shipping_total = floatval($order->get_shipping_total());

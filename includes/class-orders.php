@@ -113,6 +113,20 @@ class WPOrders_Integration
 
             $unit_price_cents = intval(round($base_price * 100));
 
+            // Clover's printer silently drops line items with price:0 — even catalog items.
+            // When the base price is $0 (item priced entirely via modifiers), move the
+            // modifier amounts into the line item price and zero them out on each modifier.
+            // Modifier names still appear on the ticket; the total shows on the item line.
+            if ($unit_price_cents === 0 && !empty($modifications)) {
+                $mods_total = array_sum(array_column($modifications, 'amount'));
+                $unit_price_cents = $mods_total;
+                $modifications = array_map(function ($m) {
+                    $m['amount'] = 0;
+                    return $m;
+                }, $modifications);
+                clover_log("PRICE:0 FIX: '{$product->get_name()}' — moved modifier total {$mods_total}c to item price, zeroed modifier amounts");
+            }
+
             $line_item = [
                 'item'  => ['id' => $external_id],
                 'name'  => $product->get_name(),
@@ -142,6 +156,11 @@ class WPOrders_Integration
             }
         }
 
+        // Ad-hoc fees (no item.id) are excluded from Clover's kitchen/order printer by design.
+        // To ensure they appear on the printed ticket, collect them here and append to the
+        // order note — Clover always prints the note on the ticket.
+        $note_fees = [];
+
         // Delivery fee — add as ad-hoc line item (no taxRates, no item.id)
         $shipping_total = floatval($order->get_shipping_total());
         if ($shipping_total > 0) {
@@ -156,6 +175,7 @@ class WPOrders_Integration
                 'price' => intval(round($shipping_total * 100)),
                 // No taxRates — delivery fee is tax-exempt
             ];
+            $note_fees[] = $shipping_label . ': $' . number_format($shipping_total, 2);
             clover_log("DELIVERY FEE: '{$shipping_label}' = \${$shipping_total}");
         }
 
@@ -185,6 +205,7 @@ class WPOrders_Integration
                 'name'  => $fee_name,
                 'price' => intval(round($fee_total * 100)),
             ];
+            $note_fees[] = $fee_name . ': $' . number_format($fee_total, 2);
             clover_log("FEE: '{$fee_name}' = \${$fee_total}");
         }
 
@@ -225,6 +246,13 @@ class WPOrders_Integration
             (!empty($customer_name) ? 'Customer: ' . $customer_name . '. ' : '') .
             (!empty($customer_note) ? 'Note: ' . $customer_note : '')
         );
+
+        // Append ad-hoc fees to note so they appear on the printed kitchen ticket.
+        // Clover's printer excludes items without item.id from the order ticket;
+        // the note is always printed and visible to kitchen/counter staff.
+        if (!empty($note_fees)) {
+            $note = trim($note . ' | ' . implode(' | ', $note_fees), ' |');
+        }
 
         // Order type
         $clover_order_type_id = null;
